@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>FunASR 安全诊断工具</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 900px; margin: 0 auto; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
+        .success { background: #d4edda; border-color: #c3e6cb; color: #155724; }
+        .error { background: #f8d7da; border-color: #f5c6cb; color: #721c24; }
+        .warning { background: #fff3cd; border-color: #ffeaa7; color: #856404; }
+        .info { background: #d1ecf1; border-color: #bee5eb; color: #0c5460; }
+        button { padding: 10px 20px; margin: 5px; font-size: 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #6c757d; cursor: not-allowed; }
+        .log { background: #f8f9fa; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 12px; max-height: 300px; overflow-y: auto; margin: 10px 0; }
+        .test-result { margin: 10px 0; padding: 8px; border-radius: 4px; }
+        .status-indicator { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }
+        .status-green { background: #28a745; }
+        .status-red { background: #dc3545; }
+        .status-yellow { background: #ffc107; }
+        .status-grey { background: #6c757d; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔍 FunASR 安全诊断工具</h1>
+        
+        <div class="section info">
+            <h3>📋 诊断说明</h3>
+            <p>这个工具会检查FunASR图形化界面的常见问题，包括：</p>
+            <ul>
+                <li>🌐 浏览器安全限制</li>
+                <li>🔌 WebSocket连接状态</li>
+                <li>🎙️ 麦克风权限</li>
+                <li>🔒 HTTPS/HTTP混合内容</li>
+                <li>🚫 跨域访问限制</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h3>🚀 自动诊断</h3>
+            <button onclick="runAllTests()">开始全面诊断</button>
+            <button onclick="clearLog()">清除日志</button>
+            <div id="overallStatus" class="test-result info" style="display: none;">
+                <span class="status-indicator status-grey"></span>
+                <strong>整体状态：</strong><span id="overallStatusText">等待诊断...</span>
+            </div>
+        </div>
+
+        <div class="section">
+            <h3>🔧 手动测试</h3>
+            <button onclick="testBasicInfo()">基础信息检查</button>
+            <button onclick="testWebSocket()">WebSocket连接测试</button>
+            <button onclick="testMicrophone()">麦克风权限测试</button>
+            <button onclick="testSecurity()">安全策略检查</button>
+        </div>
+
+        <div class="section">
+            <h3>📊 测试结果</h3>
+            <div id="testResults"></div>
+        </div>
+
+        <div class="section">
+            <h3>📋 详细日志</h3>
+            <div id="logArea" class="log">等待开始诊断...</div>
+        </div>
+
+        <div class="section">
+            <h3>💡 常见解决方案</h3>
+            <div class="warning">
+                <h4>🔒 如果是HTTPS/HTTP混合内容问题：</h4>
+                <ul>
+                    <li>在Chrome中访问 <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code></li>
+                    <li>添加 <code>http://127.0.0.1:1337</code> 到安全源列表</li>
+                    <li>或使用HTTPS访问（需要SSL证书）</li>
+                </ul>
+                
+                <h4>🎙️ 如果是麦克风权限问题：</h4>
+                <ul>
+                    <li>点击地址栏左侧的锁图标</li>
+                    <li>允许麦克风访问权限</li>
+                    <li>刷新页面重试</li>
+                </ul>
+                
+                <h4>🔌 如果是WebSocket连接问题：</h4>
+                <ul>
+                    <li>确认端口10095没有被防火墙阻止</li>
+                    <li>检查ASR服务是否正在运行</li>
+                    <li>尝试重启WebSocket服务</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let testResults = [];
+        
+        function log(message, type = 'info') {
+            const logArea = document.getElementById('logArea');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = `[${timestamp}] ${message}`;
+            
+            console.log(logEntry);
+            logArea.innerHTML += logEntry + '\\n';
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+        
+        function addTestResult(testName, status, message, details = '') {
+            const result = { testName, status, message, details, timestamp: new Date() };
+            testResults.push(result);
+            updateTestResultsDisplay();
+            
+            // 更新整体状态
+            updateOverallStatus();
+        }
+        
+        function updateTestResultsDisplay() {
+            const container = document.getElementById('testResults');
+            container.innerHTML = '';
+            
+            testResults.forEach(result => {
+                const div = document.createElement('div');
+                div.className = `test-result ${result.status}`;
+                
+                const statusClass = {
+                    'success': 'status-green',
+                    'error': 'status-red', 
+                    'warning': 'status-yellow',
+                    'info': 'status-grey'
+                }[result.status] || 'status-grey';
+                
+                div.innerHTML = `
+                    <span class="status-indicator ${statusClass}"></span>
+                    <strong>${result.testName}:</strong> ${result.message}
+                    ${result.details ? `<br><small>${result.details}</small>` : ''}
+                `;
+                container.appendChild(div);
+            });
+        }
+        
+        function updateOverallStatus() {
+            const statusDiv = document.getElementById('overallStatus');
+            const statusText = document.getElementById('overallStatusText');
+            const indicator = statusDiv.querySelector('.status-indicator');
+            
+            statusDiv.style.display = 'block';
+            
+            const errorCount = testResults.filter(r => r.status === 'error').length;
+            const warningCount = testResults.filter(r => r.status === 'warning').length;
+            const successCount = testResults.filter(r => r.status === 'success').length;
+            
+            if (errorCount > 0) {
+                indicator.className = 'status-indicator status-red';
+                statusText.textContent = `发现 ${errorCount} 个严重问题`;
+            } else if (warningCount > 0) {
+                indicator.className = 'status-indicator status-yellow';
+                statusText.textContent = `发现 ${warningCount} 个警告`;
+            } else if (successCount > 0) {
+                indicator.className = 'status-indicator status-green';
+                statusText.textContent = '所有测试通过';
+            } else {
+                indicator.className = 'status-indicator status-grey';
+                statusText.textContent = '等待诊断...';
+            }
+        }
+        
+        function clearLog() {
+            document.getElementById('logArea').innerHTML = '日志已清除...\\n';
+            testResults = [];
+            updateTestResultsDisplay();
+            document.getElementById('overallStatus').style.display = 'none';
+        }
+        
+        async function testBasicInfo() {
+            log('🔍 开始基础信息检查...');
+            
+            // 浏览器信息
+            const browserInfo = `${navigator.userAgent}`;
+            log(`浏览器: ${browserInfo.substring(0, 100)}...`);
+            addTestResult('浏览器检查', 'success', '浏览器信息获取成功', browserInfo);
+            
+            // 当前协议
+            const protocol = window.location.protocol;
+            log(`当前协议: ${protocol}`);
+            if (protocol === 'https:') {
+                addTestResult('协议检查', 'warning', 'HTTPS可能导致WebSocket连接问题', '建议使用HTTP访问本地服务');
+            } else {
+                addTestResult('协议检查', 'success', 'HTTP协议正常');
+            }
+            
+            // 页面URL
+            log(`页面URL: ${window.location.href}`);
+            addTestResult('URL检查', 'success', '页面URL正常');
+            
+            // 本地存储支持
+            try {
+                localStorage.setItem('test', 'test');
+                localStorage.removeItem('test');
+                addTestResult('本地存储', 'success', 'LocalStorage可用');
+            } catch (e) {
+                addTestResult('本地存储', 'warning', 'LocalStorage不可用', e.message);
+            }
+            
+            log('✅ 基础信息检查完成');
+        }
+        
+        async function testWebSocket() {
+            log('🔌 开始WebSocket连接测试...');
+            
+            const wsUrl = 'ws://127.0.0.1:10095';
+            log(`尝试连接: ${wsUrl}`);
+            
+            try {
+                const ws = new WebSocket(wsUrl);
+                
+                ws.onopen = function() {
+                    log('✅ WebSocket连接成功');
+                    addTestResult('WebSocket连接', 'success', '连接成功');
+                    ws.close();
+                };
+                
+                ws.onerror = function(error) {
+                    log(`❌ WebSocket连接失败: ${error}`);
+                    addTestResult('WebSocket连接', 'error', '连接失败', '请确保ASR服务在端口10095运行');
+                };
+                
+                ws.onclose = function(event) {
+                    log(`🔌 WebSocket连接关闭: code=${event.code}, reason=${event.reason}`);
+                };
+                
+                // 超时检查
+                setTimeout(() => {
+                    if (ws.readyState === WebSocket.CONNECTING) {
+                        ws.close();
+                        addTestResult('WebSocket连接', 'error', '连接超时', '服务可能未启动或端口被阻止');
+                    }
+                }, 5000);
+                
+            } catch (error) {
+                log(`❌ WebSocket测试异常: ${error.message}`);
+                addTestResult('WebSocket连接', 'error', '连接异常', error.message);
+            }
+        }
+        
+        async function testMicrophone() {
+            log('🎙️ 开始麦克风权限测试...');
+            
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                log('❌ 浏览器不支持麦克风访问');
+                addTestResult('麦克风支持', 'error', '浏览器不支持getUserMedia API');
+                return;
+            }
+            
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                log('✅ 麦克风权限获取成功');
+                addTestResult('麦克风权限', 'success', '权限已授予');
+                
+                // 释放麦克风
+                stream.getTracks().forEach(track => track.stop());
+                
+            } catch (error) {
+                log(`❌ 麦克风权限获取失败: ${error.message}`);
+                if (error.name === 'NotAllowedError') {
+                    addTestResult('麦克风权限', 'error', '权限被拒绝', '请在浏览器中允许麦克风访问');
+                } else if (error.name === 'NotFoundError') {
+                    addTestResult('麦克风权限', 'error', '未找到麦克风设备');
+                } else {
+                    addTestResult('麦克风权限', 'error', '权限获取失败', error.message);
+                }
+            }
+        }
+        
+        async function testSecurity() {
+            log('🔒 开始安全策略检查...');
+            
+            // 检查混合内容
+            if (window.location.protocol === 'https:' && window.location.hostname === '127.0.0.1') {
+                addTestResult('混合内容', 'warning', 'HTTPS访问本地HTTP服务可能被阻止', '建议使用HTTP协议访问');
+            } else {
+                addTestResult('混合内容', 'success', '无混合内容问题');
+            }
+            
+            // 检查跨域
+            try {
+                await fetch('http://127.0.0.1:10095', { mode: 'no-cors' });
+                addTestResult('跨域访问', 'success', '跨域请求正常');
+            } catch (error) {
+                addTestResult('跨域访问', 'warning', '跨域请求可能被限制', error.message);
+            }
+            
+            // 检查Content Security Policy
+            const csp = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
+            if (csp) {
+                addTestResult('CSP策略', 'warning', '发现CSP策略', '可能限制WebSocket连接');
+            } else {
+                addTestResult('CSP策略', 'success', '无CSP限制');
+            }
+            
+            log('🔒 安全策略检查完成');
+        }
+        
+        async function runAllTests() {
+            log('🚀 开始全面诊断...');
+            clearLog();
+            
+            await testBasicInfo();
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            await testSecurity();
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            await testWebSocket();
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            await testMicrophone();
+            
+            log('🎉 全面诊断完成！请查看测试结果。');
+        }
+        
+        // 页面加载完成后自动运行基础检查
+        window.onload = function() {
+            log('📄 诊断工具已加载');
+            setTimeout(testBasicInfo, 1000);
+        };
+    </script>
+</body>
+</html> 
