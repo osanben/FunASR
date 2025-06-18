@@ -26,7 +26,7 @@ class FixedFunASRWebSocketServer:
         self.connected_clients = set()
         self.client_sessions = {}  # 存储客户端会话信息
         
-    async def handle_client(self, websocket, path):
+    async def handle_client(self, websocket, path=None):
         """处理客户端连接"""
         client_address = websocket.remote_address
         logger.info(f"🔗 新客户端连接: {client_address}")
@@ -77,6 +77,10 @@ class FixedFunASRWebSocketServer:
         # 检查是否是FunASR标准初始化消息
         if "chunk_size" in data and "wav_name" in data:
             await self.handle_funasr_init(websocket, data)
+            # 如果同时包含is_speaking=False，也要处理停止说话
+            if "is_speaking" in data and not data["is_speaking"]:
+                logger.info("📋 初始化消息中包含停止说话指令...")
+                await self.handle_speaking_control(websocket, data)
         elif "is_speaking" in data:
             await self.handle_speaking_control(websocket, data)
         else:
@@ -119,6 +123,7 @@ class FixedFunASRWebSocketServer:
         
         if not is_speaking:
             # 停止说话，发送最终识别结果
+            logger.info("📋 准备发送最终识别结果...")
             await self.send_final_result(websocket, session)
     
     async def handle_audio_binary(self, websocket, audio_data):
@@ -134,12 +139,19 @@ class FixedFunASRWebSocketServer:
         # 存储音频数据
         session["audio_buffer"].append(audio_data)
         
-        # 模拟实时识别 - 发送中间结果
-        if len(session["audio_buffer"]) % 3 == 0:  # 每收到3次音频数据发送一次中间结果
+        # 减少发送频率 - 只在特定条件下发送中间结果
+        buffer_count = len(session["audio_buffer"])
+        
+        # 只在缓冲区达到一定大小时发送中间结果（减少频率）
+        if buffer_count > 0 and buffer_count % 10 == 0:  # 每10次音频数据发送一次
             await self.send_partial_result(websocket, session)
     
     async def send_partial_result(self, websocket, session):
         """发送中间识别结果"""
+        # 检查是否还在说话状态
+        if not session.get("is_speaking", True):
+            return
+            
         demo_partial_texts = [
             "正在识别",
             "这是一个",
@@ -154,19 +166,20 @@ class FixedFunASRWebSocketServer:
         # 使用FunASR标准消息格式
         response = {
             "text": partial_text,
-            "mode": session["mode"],
+            "mode": session.get("mode", "2pass"),
             "is_final": False,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         
-        await websocket.send(json.dumps(response, ensure_ascii=False))
-        logger.info(f"📤 发送中间结果: {partial_text}")
+        message = json.dumps(response, ensure_ascii=False)
+        await websocket.send(message)
+        logger.info(f"📤 发送中间结果: {partial_text} | JSON: {message}")
     
     async def send_final_result(self, websocket, session):
         """发送最终识别结果"""
         demo_final_texts = [
             "这是一个语音识别演示，效果非常好。",
-            "FunASR工具包功能强大，支持多种识别模式。",
+            "FunASR工具包功能强大，支持多种识别模式。", 
             "阿里巴巴达摩院开发的语音识别技术。",
             "实时语音转文字功能已经启用。",
             "语音识别测试完成，结果准确可靠。"
@@ -177,16 +190,18 @@ class FixedFunASRWebSocketServer:
         # 使用FunASR标准消息格式
         response = {
             "text": final_text,
-            "mode": session["mode"],
+            "mode": session.get("mode", "2pass"),
             "is_final": True,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         }
         
-        await websocket.send(json.dumps(response, ensure_ascii=False))
-        logger.info(f"🎯 发送最终结果: {final_text}")
+        message = json.dumps(response, ensure_ascii=False)
+        await websocket.send(message)
+        logger.info(f"🎯 发送最终结果: {final_text} | JSON: {message}")
         
-        # 清理音频缓冲区
+        # 清理音频缓冲区并重置说话状态
         session["audio_buffer"] = []
+        session["is_speaking"] = False
     
     async def start_server(self):
         """启动WebSocket服务器"""

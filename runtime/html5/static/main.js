@@ -366,6 +366,19 @@ function getJsonMessage( jsonMsg ) {
 	varArea.value=rec_text;
 	console.log( "offline_text: " + asrmodel+","+offline_text);
 	console.log( "rec_text: " + rec_text);
+	
+	// 修复：更新状态提示
+	if (is_final==true){
+		info_div.innerHTML="识别完成！结果已显示";
+		if (isfilemode==false){
+			btnStart.disabled = false;
+			btnStop.disabled = true;
+			btnConnect.disabled = false;
+		}
+	} else {
+		info_div.innerHTML="实时识别中...";
+	}
+	
 	if (isfilemode==true && is_final==true){
 		console.log("call stop ws!");
 		play_file();
