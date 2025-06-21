@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FunASR 语音识别 Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 3rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+            transition: transform 0.3s ease;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+        }
+
+        .card h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .icon {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+
+        .icon.mic {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+        }
+
+        .icon.settings {
+            background: linear-gradient(45deg, #4834d4, #686de0);
+            color: white;
+        }
+
+        .icon.results {
+            background: linear-gradient(45deg, #00d2d3, #54a0ff);
+            color: white;
+        }
+
+        .icon.status {
+            background: linear-gradient(45deg, #5f27cd, #a55eea);
+            color: white;
+        }
+
+        .control-group {
+            margin-bottom: 20px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        .control-group input, .control-group select, .control-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e8ed;
+            border-radius: 10px;
+            font-size: 14px;
+            transition: border-color 0.3s ease;
+        }
+
+        .control-group input:focus, .control-group select:focus, .control-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .radio-group {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .radio-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .radio-item input[type="radio"] {
+            width: auto;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+        }
+
+        .btn-success {
+            background: linear-gradient(45deg, #56ab2f, #a8e6cf);
+            color: white;
+        }
+
+        .btn-danger {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .results-area {
+            grid-column: 1 / -1;
+        }
+
+        .results-text {
+            min-height: 200px;
+            resize: vertical;
+            font-family: 'Monaco', 'Menlo', monospace;
+            background: #f8f9fa;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-connected {
+            background: #27ae60;
+            box-shadow: 0 0 10px rgba(39, 174, 96, 0.5);
+        }
+
+        .status-disconnected {
+            background: #e74c3c;
+        }
+
+        .status-recording {
+            background: #f39c12;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .audio-visualizer {
+            height: 60px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            margin: 20px 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #666;
+        }
+
+        @media (max-width: 768px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+            
+            .header h1 {
+                font-size: 2rem;
+            }
+            
+            .card {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎤 FunASR Dashboard</h1>
+            <p>阿里巴巴达摩院开源语音识别系统 - 实时语音转文字</p>
+        </div>
+
+        <div class="dashboard">
+            <!-- 连接设置 -->
+            <div class="card">
+                <h2><span class="icon settings">⚙️</span>连接设置</h2>
+                <div class="control-group">
+                    <label>WebSocket服务器地址:</label>
+                    <input type="text" id="wssip" value="wss://127.0.0.1:10095/" placeholder="输入服务器地址" onchange="addresschange()">
+                </div>
+                <div class="control-group">
+                    <label>连接状态:</label>
+                    <div>
+                        <span class="status-indicator status-disconnected" id="statusIndicator"></span>
+                        <span id="statusText">未连接</span>
+                    </div>
+                </div>
+                <button class="btn btn-primary" id="btnConnect">连接服务器</button>
+                <a id="wsslink" href="#" style="display: none;"><div id="info_wslink"></div></a>
+            </div>
+
+            <!-- 录音控制 -->
+            <div class="card">
+                <h2><span class="icon mic">🎙️</span>录音控制</h2>
+                <div class="control-group">
+                    <label>录音模式:</label>
+                    <div class="radio-group">
+                        <div class="radio-item">
+                            <input type="radio" name="recoder_mode" value="mic" checked id="mode_mic">
+                            <label for="mode_mic">麦克风</label>
+                        </div>
+                        <div class="radio-item">
+                            <input type="radio" name="recoder_mode" value="file" id="mode_file">
+                            <label for="mode_file">文件上传</label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="control-group">
+                    <label>识别模式:</label>
+                    <div class="radio-group">
+                        <div class="radio-item">
+                            <input type="radio" name="asr_mode" value="2pass" checked id="asr_2pass">
+                            <label for="asr_2pass">2Pass</label>
+                        </div>
+                        <div class="radio-item">
+                            <input type="radio" name="asr_mode" value="online" id="asr_online">
+                            <label for="asr_online">在线</label>
+                        </div>
+                        <div class="radio-item">
+                            <input type="radio" name="asr_mode" value="offline" id="asr_offline">
+                            <label for="asr_offline">离线</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="audio-visualizer" id="audioVisualizer">
+                    🎵 音频可视化区域
+                </div>
+                
+                <div id="info_div" style="text-align: center; margin: 10px 0; color: #666; font-size: 14px;">
+                    请点击连接
+                </div>
+
+                <div>
+                    <button class="btn btn-success" id="btnStart">开始录音</button>
+                    <button class="btn btn-danger" id="btnStop" disabled>停止录音</button>
+                </div>
+            </div>
+
+            <!-- 高级设置 -->
+            <div class="card">
+                <h2><span class="icon settings">🔧</span>高级设置</h2>
+                <div class="control-group">
+                    <label>热词设置 (一行一个，格式: 词语 权重):</label>
+                    <textarea id="varHot" rows="4" placeholder="阿里巴巴 20&#10;FunASR 30&#10;语音识别 25">阿里巴巴 20
+FunASR 30
+语音识别 25</textarea>
+                </div>
+                
+                <div class="control-group">
+                    <label>逆文本标准化(ITN):</label>
+                    <div class="radio-group">
+                        <div class="radio-item">
+                            <input type="radio" name="use_itn" value="false" checked id="itn_no">
+                            <label for="itn_no">关闭</label>
+                        </div>
+                        <div class="radio-item">
+                            <input type="radio" name="use_itn" value="true" id="itn_yes">
+                            <label for="itn_yes">开启</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="control-group" id="fileUploadDiv" style="display: none;">
+                    <label>选择音频文件:</label>
+                    <input type="file" id="upfile" accept="audio/*">
+                </div>
+            </div>
+
+            <!-- 系统状态 -->
+            <div class="card">
+                <h2><span class="icon status">📊</span>系统状态</h2>
+                <div class="control-group">
+                    <label>服务器信息:</label>
+                    <div id="serverInfo">
+                        <p>🌐 HTML5服务器: http://127.0.0.1:1337</p>
+                        <p>🔌 WebSocket服务器: ws://127.0.0.1:10095</p>
+                    </div>
+                </div>
+                
+                <div class="control-group">
+                    <label>识别统计:</label>
+                    <div id="statsInfo">
+                        <p>📝 识别次数: <span id="recognitionCount">0</span></p>
+                        <p>⏱️ 总时长: <span id="totalDuration">0s</span></p>
+                        <p>📈 成功率: <span id="successRate">0%</span></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 识别结果 -->
+        <div class="card results-area">
+            <h2><span class="icon results">📄</span>识别结果</h2>
+            <div class="control-group">
+                <textarea id="varArea" class="results-text" readonly placeholder="识别结果将在这里显示..."></textarea>
+            </div>
+            <div>
+                <button class="btn btn-primary" onclick="clearResults()">清空结果</button>
+                <button class="btn btn-primary" onclick="copyResults()">复制结果</button>
+                <button class="btn btn-primary" onclick="downloadResults()">下载结果</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 音频播放器 -->
+    <audio id="audio_record" style="display: none;"></audio>
+
+    <!-- 引入原有的JavaScript文件 -->
+    <script src="recorder-core.js"></script>
+    <script src="wav.js"></script>
+    <script src="pcm.js"></script>
+    <script src="wsconnecter.js"></script>
+    <script src="main.js"></script>
+
+    <script>
+        // Dashboard增强功能
+        let recognitionCount = 0;
+        let totalDuration = 0;
+        let startTime = null;
+
+        // 等待原有JavaScript加载完成
+        window.addEventListener('load', function() {
+            initializeDashboard();
+        });
+
+        function initializeDashboard() {
+            // 文件上传模式切换
+            document.querySelectorAll('input[name="recoder_mode"]').forEach(radio => {
+                radio.addEventListener('change', function() {
+                    const fileUploadDiv = document.getElementById('fileUploadDiv');
+                    if (this.value === 'file') {
+                        fileUploadDiv.style.display = 'block';
+                        isfilemode = true;
+                    } else {
+                        fileUploadDiv.style.display = 'none';
+                        isfilemode = false;
+                    }
+                    // 调用原有的模式切换函数
+                    if (typeof on_recoder_mode_change === 'function') {
+                        on_recoder_mode_change();
+                    }
+                });
+            });
+
+            // 重写原有的getConnState函数，添加Dashboard状态更新
+            const originalGetConnState = window.getConnState;
+            window.getConnState = function(connState) {
+                // 调用原有逻辑
+                if (originalGetConnState) {
+                    originalGetConnState(connState);
+                }
+                
+                // 更新Dashboard状态
+                if (connState === 0) { // 连接成功
+                    updateConnectionStatus(true);
+                } else if (connState === 2) { // 连接失败
+                    updateConnectionStatus(false);
+                }
+            };
+
+            // 重写按钮事件，但保留原有功能
+            const originalBtnConnect = document.getElementById('btnConnect');
+            const originalBtnStart = document.getElementById('btnStart');
+            const originalBtnStop = document.getElementById('btnStop');
+
+            // 保存原有的onclick事件
+            const originalConnectHandler = originalBtnConnect.onclick;
+            const originalStartHandler = originalBtnStart.onclick;
+            const originalStopHandler = originalBtnStop.onclick;
+
+            // 重新绑定连接按钮
+            originalBtnConnect.onclick = function() {
+                console.log('Dashboard: 连接按钮被点击');
+                updateConnectionStatus(false); // 先设为连接中状态
+                // 调用原有的连接逻辑
+                if (originalConnectHandler) {
+                    originalConnectHandler.call(this);
+                } else if (typeof start === 'function') {
+                    start();
+                }
+            };
+
+            // 重新绑定开始录音按钮
+            originalBtnStart.onclick = function() {
+                console.log('Dashboard: 开始录音按钮被点击');
+                updateRecordingStatus(true);
+                startTime = Date.now();
+                // 调用原有的录音逻辑
+                if (originalStartHandler) {
+                    originalStartHandler.call(this);
+                } else if (typeof record === 'function') {
+                    record();
+                }
+            };
+
+            // 重新绑定停止录音按钮
+            originalBtnStop.onclick = function() {
+                console.log('Dashboard: 停止录音按钮被点击');
+                updateRecordingStatus(false);
+                if (startTime) {
+                    totalDuration += (Date.now() - startTime) / 1000;
+                    recognitionCount++;
+                    updateStats();
+                    startTime = null;
+                }
+                // 调用原有的停止逻辑
+                if (originalStopHandler) {
+                    originalStopHandler.call(this);
+                } else if (typeof stop === 'function') {
+                    stop();
+                }
+            };
+
+            // 初始化状态
+            updateConnectionStatus(false);
+            updateStats();
+        }
+
+        // 更新连接状态
+        function updateConnectionStatus(connected) {
+            const indicator = document.getElementById('statusIndicator');
+            const text = document.getElementById('statusText');
+            
+            if (connected) {
+                indicator.className = 'status-indicator status-connected';
+                text.textContent = '已连接';
+            } else {
+                indicator.className = 'status-indicator status-disconnected';
+                text.textContent = '未连接';
+            }
+        }
+
+        // 更新录音状态
+        function updateRecordingStatus(recording) {
+            const indicator = document.getElementById('statusIndicator');
+            const visualizer = document.getElementById('audioVisualizer');
+            
+            if (recording) {
+                indicator.className = 'status-indicator status-recording';
+                visualizer.innerHTML = '🎙️ 正在录音...';
+            } else {
+                indicator.className = 'status-indicator status-connected';
+                visualizer.innerHTML = '🎵 音频可视化区域';
+            }
+        }
+
+        // 更新统计信息
+        function updateStats() {
+            document.getElementById('recognitionCount').textContent = recognitionCount;
+            document.getElementById('totalDuration').textContent = Math.round(totalDuration) + 's';
+            document.getElementById('successRate').textContent = '100%'; // 简化处理
+        }
+
+        // 清空结果
+        function clearResults() {
+            document.getElementById('varArea').value = '';
+            if (typeof clear === 'function') {
+                clear();
+            }
+        }
+
+        // 复制结果
+        function copyResults() {
+            const textarea = document.getElementById('varArea');
+            textarea.select();
+            document.execCommand('copy');
+            alert('结果已复制到剪贴板！');
+        }
+
+        // 下载结果
+        function downloadResults() {
+            const content = document.getElementById('varArea').value;
+            const blob = new Blob([content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'recognition_results_' + new Date().getTime() + '.txt';
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html> 

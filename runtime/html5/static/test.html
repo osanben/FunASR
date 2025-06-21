@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket 测试</title>
+    <meta charset="utf-8">
+</head>
+<body>
+    <h1>FunASR WebSocket 连接测试</h1>
+    <button id="connect">连接</button>
+    <button id="disconnect">断开</button>
+    <button id="clear">清空</button>
+    <br><br>
+    <textarea id="messages" rows="20" cols="80" readonly></textarea>
+    
+    <script>
+        let ws = null;
+        let messageArea = document.getElementById('messages');
+        
+        document.getElementById('connect').onclick = function() {
+            if (ws) {
+                ws.close();
+            }
+            
+            ws = new WebSocket('wss://127.0.0.1:10095', ['binary']);
+            
+            ws.onopen = function() {
+                addMessage('✅ WebSocket 连接已打开');
+            };
+            
+            ws.onmessage = function(event) {
+                try {
+                    let data = JSON.parse(event.data);
+                    addMessage('📨 收到消息: ' + JSON.stringify(data, null, 2));
+                } catch (e) {
+                    addMessage('📨 收到原始数据: ' + event.data);
+                }
+            };
+            
+            ws.onerror = function(error) {
+                addMessage('❌ WebSocket 错误: ' + error);
+            };
+            
+            ws.onclose = function() {
+                addMessage('🔌 WebSocket 连接已关闭');
+            };
+        };
+        
+        document.getElementById('disconnect').onclick = function() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        };
+        
+        document.getElementById('clear').onclick = function() {
+            messageArea.value = '';
+        };
+        
+        function addMessage(message) {
+            let timestamp = new Date().toLocaleTimeString();
+            messageArea.value += `[${timestamp}] ${message}\n`;
+            messageArea.scrollTop = messageArea.scrollHeight;
+        }
+    </script>
+</body>
+</html> 

@@ -52,7 +52,12 @@ var totalsend=0;
 
 
 var now_ipaddress=window.location.href;
-now_ipaddress=now_ipaddress.replace("https://","wss://");
+// 根据当前协议决定WebSocket协议
+if(window.location.protocol === "https:") {
+    now_ipaddress=now_ipaddress.replace("https://","wss://");
+} else {
+    now_ipaddress=now_ipaddress.replace("http://","ws://");
+}
 now_ipaddress=now_ipaddress.replace("static/index.html","");
 var localport=window.location.port;
 now_ipaddress=now_ipaddress.replace(localport,"10095");
@@ -140,26 +145,108 @@ var readWavInfo=function(bytes){
 upfile.onchange = function () {
 　　　　　　var len = this.files.length;  
             for(let i = 0; i < len; i++) {
-
-                let fileAudio = new FileReader();
-                fileAudio.readAsArrayBuffer(this.files[i]);  
- 
 				file_ext=this.files[i].name.split('.').pop().toLowerCase();
-                var audioblob;
-                fileAudio.onload = function() {
-                audioblob = fileAudio.result;
- 
-				 
-				 file_data_array=audioblob;
- 
-                  
-                 info_div.innerHTML='请点击连接进行识别';
- 
-                }
+				console.log("File extension:", file_ext);
+				
+				if (file_ext === "mp3" || file_ext === "m4a" || file_ext === "aac") {
+					// 对于压缩音频格式，使用Audio元素解码
+					console.log("Processing compressed audio file:", file_ext);
+					var audioElement = new Audio();
+					var objectURL = URL.createObjectURL(this.files[i]);
+					audioElement.src = objectURL;
+					
+					audioElement.addEventListener('loadeddata', function() {
+						console.log("Audio loaded, duration:", audioElement.duration);
+						console.log("Audio sample rate:", audioElement.sampleRate || "unknown");
+						
+						// 使用Web Audio API解码
+						var audioContext = new (window.AudioContext || window.webkitAudioContext)();
+						console.log("AudioContext sample rate:", audioContext.sampleRate);
+						
+						fetch(objectURL)
+							.then(response => response.arrayBuffer())
+							.then(arrayBuffer => {
+								console.log("Fetched audio data, size:", arrayBuffer.byteLength);
+								return audioContext.decodeAudioData(arrayBuffer);
+							})
+							.then(audioBuffer => {
+								console.log("Audio decoded successfully");
+								console.log("Sample rate:", audioBuffer.sampleRate);
+								console.log("Channels:", audioBuffer.numberOfChannels);
+								console.log("Duration:", audioBuffer.duration);
+								console.log("Length:", audioBuffer.length);
+								
+								// 获取左声道数据（如果是立体声，只取左声道）
+								var channelData = audioBuffer.getChannelData(0);
+								console.log("Channel data length:", channelData.length);
+								console.log("Channel data type:", channelData.constructor.name);
+								console.log("First 10 samples:", Array.from(channelData.slice(0, 10)));
+								
+								// 重采样到16kHz（如果需要）
+								var targetSampleRate = 16000;
+								var resampledData;
+								
+								if (audioBuffer.sampleRate !== targetSampleRate) {
+									console.log("Resampling from", audioBuffer.sampleRate, "to", targetSampleRate);
+									var ratio = audioBuffer.sampleRate / targetSampleRate;
+									var newLength = Math.round(channelData.length / ratio);
+									resampledData = new Float32Array(newLength);
+									
+									for (var i = 0; i < newLength; i++) {
+										var srcIndex = Math.round(i * ratio);
+										resampledData[i] = channelData[srcIndex];
+									}
+									console.log("Resampled length:", resampledData.length);
+								} else {
+									resampledData = channelData;
+								}
+								
+								// 转换为16位PCM
+								var pcmData = new Int16Array(resampledData.length);
+								for (var i = 0; i < resampledData.length; i++) {
+									// 将Float32 (-1.0 to 1.0) 转换为 Int16 (-32768 to 32767)
+									var sample = Math.max(-1, Math.min(1, resampledData[i]));
+									pcmData[i] = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+								}
+								
+								console.log("PCM data length:", pcmData.length);
+								console.log("PCM first 10 samples:", Array.from(pcmData.slice(0, 10)));
+								
+								// 存储为ArrayBuffer
+								file_data_array = pcmData.buffer;
+								file_sample_rate = targetSampleRate;
+								
+								info_div.innerHTML='请点击连接进行识别';
+								URL.revokeObjectURL(objectURL);
+							})
+							.catch(error => {
+								console.error("Audio decoding failed:", error);
+								alert("音频解码失败：" + error.message + "\n请尝试使用WAV格式的音频文件。");
+							});
+					});
+					
+					audioElement.addEventListener('error', function(e) {
+						console.error("Audio loading failed:", e);
+						alert("音频加载失败，请检查文件格式。");
+					});
+					
+				} else {
+					// 对于WAV等未压缩格式，使用原有逻辑
+					console.log("Processing uncompressed audio file:", file_ext);
+					let fileAudio = new FileReader();
+					fileAudio.readAsArrayBuffer(this.files[i]);  
+					
+					var audioblob;
+					fileAudio.onload = function() {
+						audioblob = fileAudio.result;
+						file_data_array=audioblob;
+						info_div.innerHTML='请点击连接进行识别';
+					}
 
-　　　　　　　　　　fileAudio.onerror = function(e) {
-　　　　　　　　　　　　console.log('error' + e);
-　　　　　　　　　　}
+					fileAudio.onerror = function(e) {
+						console.log('error' + e);
+					}
+				}
             }
 			// for wav file, we  get the sample rate
 			if(file_ext=="wav")
@@ -193,28 +280,92 @@ function play_file()
 }
 function start_file_send()
 {
-		sampleBuf=new Uint8Array( file_data_array );
+	console.log("=== start_file_send called ===");
+	console.log("file_data_array type:", file_data_array.constructor.name, "length:", file_data_array.length);
+	console.log("file_ext:", file_ext);
+	console.log("file_sample_rate:", file_sample_rate);
  
-		var chunk_size=960; // for asr chunk_size [5, 10, 5]
+	var audioData;
  
-
- 
+	// 检查文件数据格式
+	if (file_data_array instanceof ArrayBuffer) {
+		console.log("File data is ArrayBuffer");
 		
- 
-		while(sampleBuf.length>=chunk_size){
-			
-		    sendBuf=sampleBuf.slice(0,chunk_size);
-			totalsend=totalsend+sampleBuf.length;
-			sampleBuf=sampleBuf.slice(chunk_size,sampleBuf.length);
-			wsconnecter.wsSend(sendBuf);
- 
-		 
+		// 如果是压缩音频格式，数据已经在上传时解码为PCM
+		if (file_ext === "mp3" || file_ext === "m4a" || file_ext === "aac") {
+			console.log("Using pre-decoded PCM data for compressed audio");
+			sampleBuf = new Int16Array(file_data_array);
 		}
+		// 如果是WAV文件，跳过WAV文件头
+		else if (file_ext === "wav") {
+			console.log("Processing WAV file, skipping header");
+			var uint8Array = new Uint8Array(file_data_array);
+			
+			// 检查WAV文件头
+			var riffHeader = String.fromCharCode.apply(null, uint8Array.slice(0, 4));
+			var waveHeader = String.fromCharCode.apply(null, uint8Array.slice(8, 12));
+			console.log("RIFF header:", riffHeader);
+			console.log("WAVE header:", waveHeader);
+			
+			if (riffHeader === "RIFF" && waveHeader === "WAVE") {
+				// 跳过44字节的WAV文件头
+				console.log("Valid WAV file, skipping 44-byte header");
+				audioData = file_data_array.slice(44);
+			} else {
+				console.log("Invalid WAV header, using full data");
+				audioData = file_data_array;
+			}
+			sampleBuf = new Int16Array(audioData);
+		} else {
+			console.log("Unknown file format, using full data");
+			sampleBuf = new Int16Array(file_data_array);
+		}
+	} else if (file_data_array instanceof Uint8Array) {
+		console.log("File data is Uint8Array, converting to Int16Array");
+		// 将Uint8Array转换为Int16Array (假设是小端序16位PCM)
+		var buffer = new ArrayBuffer(file_data_array.length);
+		var uint8View = new Uint8Array(buffer);
+		uint8View.set(file_data_array);
+		sampleBuf = new Int16Array(buffer);
+	} else {
+		console.log("File data format unknown, using as-is");
+		sampleBuf = new Uint8Array(file_data_array);
+	}
  
-		stop();
-
+	console.log("sampleBuf type:", sampleBuf.constructor.name, "length:", sampleBuf.length);
+	console.log("sampleBuf first 10 values:", Array.from(sampleBuf.slice(0,10)));
  
-
+	// 检查音频数据是否合理
+	var maxValue = Math.max(...Array.from(sampleBuf.slice(0, Math.min(1000, sampleBuf.length))));
+	var minValue = Math.min(...Array.from(sampleBuf.slice(0, Math.min(1000, sampleBuf.length))));
+	console.log("Audio data range: min =", minValue, "max =", maxValue);
+ 
+	var chunk_size=960; // for asr chunk_size [5, 10, 5]
+	console.log("File mode chunk_size:", chunk_size);
+ 
+	while(sampleBuf.length>=chunk_size){
+		console.log("=== Sending file chunk ===");
+		sendBuf=sampleBuf.slice(0,chunk_size);
+		totalsend=totalsend+sendBuf.length;
+		sampleBuf=sampleBuf.slice(chunk_size,sampleBuf.length);
+		
+		// 确保发送正确的16位PCM格式
+		if (sendBuf instanceof Int16Array) {
+			console.log("Sending Int16Array chunk, length:", sendBuf.length);
+			var buffer = new ArrayBuffer(sendBuf.length * 2);
+			var view = new Int16Array(buffer);
+			view.set(sendBuf);
+			console.log("Sending buffer size:", buffer.byteLength, "first 4 bytes:", new Uint8Array(buffer.slice(0,4)));
+			wsconnecter.wsSend(buffer);
+		} else {
+			console.log("Sending Uint8Array chunk (legacy), length:", sendBuf.length);
+			wsconnecter.wsSend(sendBuf);
+		}
+		
+		console.log("Remaining sampleBuf length:", sampleBuf.length);
+	}
+ 
+	stop();
 }
  
 	
@@ -384,9 +535,10 @@ function getJsonMessage( jsonMsg ) {
 
 // 连接状态响应
 function getConnState( connState ) {
+	console.log("=== getConnState called with:", connState, "===");
 	if ( connState === 0 ) { //on open
- 
- 
+		console.log("WebSocket connected successfully");
+		
 		info_div.innerHTML='连接成功!请点击开始';
 		if (isfilemode==true){
 			info_div.innerHTML='请耐心等待,大文件等待时间更长';
@@ -394,6 +546,9 @@ function getConnState( connState ) {
 		}
 		else
 		{
+			// WebSocket连接成功后，启动录音
+			console.log("Starting recording...");
+			record();
 			btnStart.disabled = false;
 			btnStop.disabled = true;
 			btnConnect.disabled=true;
@@ -416,21 +571,25 @@ function getConnState( connState ) {
 
 function record()
 {
+	console.log("=== record() called ===");
+	console.log("rec object:", rec);
  
-		 rec.open( function(){
-		 rec.start();
-		 console.log("开始");
-			btnStart.disabled = true;
-			btnStop.disabled = false;
-			btnConnect.disabled=true;
-		 });
- 
+	rec.open( function(){
+		console.log("=== rec.open callback ===");
+		rec.start();
+		console.log("=== rec.start() called ===");
+		console.log("开始");
+		btnStart.disabled = true;
+		btnStop.disabled = false;
+		btnConnect.disabled=true;
+	});
 }
 
  
 
 // 识别启动、停止、清空操作
 function start() {
+	console.log("=== start() called ===");
 	
 	// 清除显示
 	clear();
@@ -438,11 +597,14 @@ function start() {
  	console.log("isfilemode"+isfilemode);
     
 	//启动连接
+	console.log("Calling wsconnecter.wsStart()");
 	var ret=wsconnecter.wsStart();
+	console.log("wsStart returned:", ret);
 	// 1 is ok, 0 is error
 	if(ret==1){
 		info_div.innerHTML="正在连接asr服务器，请等待...";
 		isRec = true;
+		console.log("Set isRec to true");
 		btnStart.disabled = true;
 		btnStop.disabled = true;
 		btnConnect.disabled=true;
@@ -472,7 +634,13 @@ function stop() {
 		};
 		console.log(request);
 		if(sampleBuf.length>0){
-		wsconnecter.wsSend(sampleBuf);
+		// 创建新的ArrayBuffer确保正确的16位PCM格式
+		console.log("Final sampleBuf type:", sampleBuf.constructor.name, "length:", sampleBuf.length);
+		var buffer = new ArrayBuffer(sampleBuf.length * 2);
+		var view = new Int16Array(buffer);
+		view.set(sampleBuf);
+		console.log("Sending final buffer size:", buffer.byteLength, "first 4 bytes:", new Uint8Array(buffer.slice(0,4)));
+		wsconnecter.wsSend(buffer);
 		console.log("sampleBuf.length"+sampleBuf.length);
 		sampleBuf=new Int16Array();
 		}
@@ -542,26 +710,51 @@ function clear() {
 
  
 function recProcess( buffer, powerLevel, bufferDuration, bufferSampleRate,newBufferIdx,asyncEnd ) {
+	console.log("=== recProcess called ===");
+	console.log("isRec:", isRec);
+	console.log("buffer.length:", buffer.length);
+	console.log("powerLevel:", powerLevel);
+	console.log("bufferDuration:", bufferDuration);
+	console.log("bufferSampleRate:", bufferSampleRate);
+	
 	if ( isRec === true ) {
 		var data_48k = buffer[buffer.length-1];  
+		console.log("data_48k type:", data_48k.constructor.name, "length:", data_48k.length);
+		console.log("data_48k first 5 values:", Array.from(data_48k.slice(0,5)));
  
 		var  array_48k = new Array(data_48k);
-		var data_16k=Recorder.SampleData(array_48k,bufferSampleRate,16000).data;
+		console.log("array_48k length:", array_48k.length);
+		
+		var sampleResult = Recorder.SampleData(array_48k,bufferSampleRate,16000);
+		console.log("SampleData result:", sampleResult);
+		var data_16k = sampleResult.data;
+		console.log("data_16k type:", data_16k.constructor.name, "length:", data_16k.length);
+		console.log("data_16k first 5 values:", Array.from(data_16k.slice(0,5)));
  
+		var oldSampleBufLength = sampleBuf.length;
 		sampleBuf = Int16Array.from([...sampleBuf, ...data_16k]);
+		console.log("sampleBuf length: before=" + oldSampleBufLength + ", after=" + sampleBuf.length + ", added=" + data_16k.length);
+		
 		var chunk_size=960; // for asr chunk_size [5, 10, 5]
 		info_div.innerHTML=""+bufferDuration/1000+"s";
+		
+		console.log("Checking if sampleBuf.length(" + sampleBuf.length + ") >= chunk_size(" + chunk_size + ")");
 		while(sampleBuf.length>=chunk_size){
+			console.log("=== Sending chunk ===");
 		    sendBuf=sampleBuf.slice(0,chunk_size);
 			sampleBuf=sampleBuf.slice(chunk_size,sampleBuf.length);
-			wsconnecter.wsSend(sendBuf);
-			
-			
-		 
+			// 创建新的ArrayBuffer确保正确的16位PCM格式
+			console.log("sendBuf type:", sendBuf.constructor.name, "length:", sendBuf.length);
+			console.log("sendBuf first 5 values:", Array.from(sendBuf.slice(0,5)));
+			var buffer = new ArrayBuffer(sendBuf.length * 2);
+			var view = new Int16Array(buffer);
+			view.set(sendBuf);
+			console.log("Sending buffer size:", buffer.byteLength, "first 4 bytes:", new Uint8Array(buffer.slice(0,4)));
+			wsconnecter.wsSend(buffer);
+			console.log("Remaining sampleBuf length:", sampleBuf.length);
 		}
-		
- 
-		
+	} else {
+		console.log("isRec is false, skipping processing");
 	}
 }
 

@@ -24,6 +24,10 @@ app = Flask(__name__, static_folder="static", static_url_path="/static")
 def homePage():
     return redirect("/static/index.html")
 
+@app.route("/dashboard")
+def dashboardPage():
+    return redirect("/static/dashboard.html")
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument(
@@ -59,5 +63,5 @@ if __name__ == "__main__":
         threaded=True,
         host=args.host,
         port=port,
-        ssl_context=(args.certfile, args.keyfile),
+        # ssl_context=(args.certfile, args.keyfile),  # 禁用SSL，使用HTTP
     )

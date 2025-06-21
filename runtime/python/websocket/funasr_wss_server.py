@@ -135,7 +135,7 @@ async def clear_websocket():
     websocket_users.clear()
 
 
-async def ws_serve(websocket, path):
+async def ws_serve(websocket):
     frames = []
     frames_asr = []
     frames_asr_online = []
@@ -156,8 +156,16 @@ async def ws_serve(websocket, path):
 
     try:
         async for message in websocket:
+            print(f"[DEBUG] Received message type: {type(message)}, size: {len(message) if isinstance(message, (str, bytes)) else 'unknown'}", flush=True)
             if isinstance(message, str):
+                print(f"[DEBUG] JSON message received: {message[:200]}...", flush=True)
                 messagejson = json.loads(message)
+                
+                # 检查音频格式相关配置
+                if "wav_format" in messagejson:
+                    print(f"[DEBUG] Audio format specified: {messagejson['wav_format']}", flush=True)
+                if "audio_fs" in messagejson:
+                    print(f"[DEBUG] Audio sample rate: {messagejson['audio_fs']}", flush=True)
 
                 if "is_speaking" in messagejson:
                     websocket.is_speaking = messagejson["is_speaking"]
@@ -183,15 +191,29 @@ async def ws_serve(websocket, path):
                     websocket.status_dict_asr["hotword"] = messagejson["hotwords"]
                 if "mode" in messagejson:
                     websocket.mode = messagejson["mode"]
+                    print(f"[DEBUG] ASR mode set to: {websocket.mode}", flush=True)
 
             websocket.status_dict_vad["chunk_size"] = int(
                 websocket.status_dict_asr_online["chunk_size"][1] * 60 / websocket.chunk_interval
             )
             if len(frames_asr_online) > 0 or len(frames_asr) >= 0 or not isinstance(message, str):
                 if not isinstance(message, str):
+                    print(f"[DEBUG] Audio data received: {len(message)} bytes, type: {type(message)}", flush=True)
+                    # 检查音频数据的前几个字节来判断格式
+                    if len(message) >= 4:
+                        header = message[:4]
+                        if header.startswith(b'ID3') or header[1:4] == b'ID3':
+                            print(f"[DEBUG] Detected MP3 format (ID3 header)", flush=True)
+                        elif header.startswith(b'RIFF'):
+                            print(f"[DEBUG] Detected WAV format (RIFF header)", flush=True)
+                        elif header.startswith(b'fLaC'):
+                            print(f"[DEBUG] Detected FLAC format", flush=True)
+                        else:
+                            print(f"[DEBUG] Unknown audio format, header bytes: {header.hex()}", flush=True)
                     frames.append(message)
                     duration_ms = len(message) // 32
                     websocket.vad_pre_idx += duration_ms
+                    print(f"[DEBUG] Total frames accumulated: {len(frames)}, total audio duration: {websocket.vad_pre_idx}ms", flush=True)
 
                     # asr online
                     frames_asr_online.append(message)
@@ -209,26 +231,33 @@ async def ws_serve(websocket, path):
                         frames_asr_online = []
                     if speech_start:
                         frames_asr.append(message)
+                        print(f"[DEBUG] Added audio frame to ASR buffer (speech_start=True), total frames: {len(frames_asr)}", flush=True)
+                    else:
+                        print(f"[DEBUG] Audio frame NOT added to ASR buffer (speech_start=False)", flush=True)
                     # vad online
                     try:
                         speech_start_i, speech_end_i = await async_vad(websocket, message)
-                    except:
-                        print("error in vad")
+                        print(f"[DEBUG] VAD result: start={speech_start_i}, end={speech_end_i}", flush=True)
+                    except Exception as e:
+                        print(f"[ERROR] VAD error: {e}", flush=True)
                     if speech_start_i != -1:
+                        print(f"[DEBUG] Speech start detected at {speech_start_i}ms", flush=True)
                         speech_start = True
                         beg_bias = (websocket.vad_pre_idx - speech_start_i) // duration_ms
                         frames_pre = frames[-beg_bias:]
                         frames_asr = []
                         frames_asr.extend(frames_pre)
+                        print(f"[DEBUG] Added {len(frames_pre)} pre-frames to ASR buffer", flush=True)
                 # asr punc offline
                 if speech_end_i != -1 or not websocket.is_speaking:
-                    # print("vad end point")
+                    print(f"[DEBUG] Speech end detected (end_i={speech_end_i}, is_speaking={websocket.is_speaking})", flush=True)
                     if websocket.mode == "2pass" or websocket.mode == "offline":
                         audio_in = b"".join(frames_asr)
                         try:
+                            print(f"[DEBUG] Starting offline ASR with {len(audio_in)} bytes audio from {len(frames_asr)} frames", flush=True)
                             await async_asr(websocket, audio_in)
-                        except:
-                            print("error in asr offline")
+                        except Exception as e:
+                            print(f"[ERROR] ASR offline error: {e}", flush=True)
                     frames_asr = []
                     speech_start = False
                     frames_asr_online = []
@@ -251,27 +280,39 @@ async def ws_serve(websocket, path):
 
 
 async def async_vad(websocket, audio_in):
-
+    print(f"[DEBUG] VAD processing {len(audio_in)} bytes audio", flush=True)
+    print(f"[DEBUG] VAD status_dict: {websocket.status_dict_vad}", flush=True)
+    
     segments_result = model_vad.generate(input=audio_in, **websocket.status_dict_vad)[0]["value"]
-    # print(segments_result)
+    print(f"[DEBUG] VAD raw result: {segments_result}", flush=True)
 
     speech_start = -1
     speech_end = -1
 
-    if len(segments_result) == 0 or len(segments_result) > 1:
+    if len(segments_result) == 0:
+        print(f"[DEBUG] VAD: No segments detected (empty result)", flush=True)
         return speech_start, speech_end
+    elif len(segments_result) > 1:
+        print(f"[DEBUG] VAD: Multiple segments detected ({len(segments_result)} segments)", flush=True)
+        return speech_start, speech_end
+    
     if segments_result[0][0] != -1:
         speech_start = segments_result[0][0]
+        print(f"[DEBUG] VAD: Speech start found at {speech_start}ms", flush=True)
     if segments_result[0][1] != -1:
         speech_end = segments_result[0][1]
+        print(f"[DEBUG] VAD: Speech end found at {speech_end}ms", flush=True)
+    
     return speech_start, speech_end
 
 
 async def async_asr(websocket, audio_in):
+    print(f"[DEBUG] async_asr called with {len(audio_in)} bytes", flush=True)
     if len(audio_in) > 0:
         # print(len(audio_in))
+        print(f"[DEBUG] Calling model_asr.generate with status_dict: {websocket.status_dict_asr}", flush=True)
         rec_result = model_asr.generate(input=audio_in, **websocket.status_dict_asr)[0]
-        # print("offline_asr, ", rec_result)
+        print(f"[DEBUG] ASR result: {rec_result}", flush=True)
         if model_punc is not None and len(rec_result["text"]) > 0:
             # print("offline, before punc", rec_result, "cache", websocket.status_dict_punc)
             rec_result = model_punc.generate(
@@ -326,20 +367,28 @@ async def async_asr_online(websocket, audio_in):
             await websocket.send(message)
 
 
-if len(args.certfile) > 0:
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+async def main():
+    if len(args.certfile) > 0:
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 
-    # Generate with Lets Encrypt, copied to this location, chown to current user and 400 permissions
-    ssl_cert = args.certfile
-    ssl_key = args.keyfile
+        # Generate with Lets Encrypt, copied to this location, chown to current user and 400 permissions
+        ssl_cert = args.certfile
+        ssl_key = args.keyfile
 
-    ssl_context.load_cert_chain(ssl_cert, keyfile=ssl_key)
-    start_server = websockets.serve(
-        ws_serve, args.host, args.port, subprotocols=["binary"], ping_interval=None, ssl=ssl_context
-    )
-else:
-    start_server = websockets.serve(
-        ws_serve, args.host, args.port, subprotocols=["binary"], ping_interval=None
-    )
-asyncio.get_event_loop().run_until_complete(start_server)
-asyncio.get_event_loop().run_forever()
+        ssl_context.load_cert_chain(ssl_cert, keyfile=ssl_key)
+        start_server = websockets.serve(
+            ws_serve, args.host, args.port, subprotocols=["binary"], ping_interval=None, ssl=ssl_context
+        )
+    else:
+        start_server = websockets.serve(
+            ws_serve, args.host, args.port, subprotocols=["binary"], ping_interval=None
+        )
+    
+    await start_server
+    print(f"WebSocket server started on {args.host}:{args.port}")
+    
+    # Keep the server running
+    await asyncio.Future()  # run forever
+
+if __name__ == "__main__":
+    asyncio.run(main())
