@@ -365,7 +365,36 @@ function start_file_send()
 		console.log("Remaining sampleBuf length:", sampleBuf.length);
 	}
  
-	stop();
+	// 发送剩余的音频数据
+	if(sampleBuf.length > 0) {
+		console.log("=== Sending final chunk ===");
+		console.log("Final sampleBuf type:", sampleBuf.constructor.name, "length:", sampleBuf.length);
+		var buffer = new ArrayBuffer(sampleBuf.length * 2);
+		var view = new Int16Array(buffer);
+		view.set(sampleBuf);
+		console.log("Sending final buffer size:", buffer.byteLength, "first 4 bytes:", new Uint8Array(buffer.slice(0,4)));
+		wsconnecter.wsSend(buffer);
+		sampleBuf=new Int16Array();
+	}
+	
+	// 发送结束信号但不立即停止连接
+	var chunk_size = new Array( 5, 10, 5 );
+	var request = {
+		"chunk_size": chunk_size,
+		"wav_name":  "h5",
+		"is_speaking":  false,
+		"chunk_interval":10,
+		"mode":getAsrMode(),
+	};
+	console.log("Sending final request:", request);
+	wsconnecter.wsSend( JSON.stringify(request) );
+	
+	info_div.innerHTML="文件已发送完成，正在等待识别结果...";
+	
+	// 启用停止按钮，让用户手动控制何时停止
+	btnStop.disabled = false;
+	btnStart.disabled = true;
+	btnConnect.disabled = true;
 }
  
 	
@@ -518,15 +547,14 @@ function getJsonMessage( jsonMsg ) {
 	console.log( "offline_text: " + asrmodel+","+offline_text);
 	console.log( "rec_text: " + rec_text);
 	if (isfilemode==true && is_final==true){
-		console.log("call stop ws!");
+		console.log("File processing completed, but keeping connection open");
 		play_file();
-		wsconnecter.wsStop();
-        
-		info_div.innerHTML="请点击连接";
+		
+		info_div.innerHTML="识别完成！您可以点击停止按钮断开连接";
  
 		btnStart.disabled = true;
-		btnStop.disabled = true;
-		btnConnect.disabled=false;
+		btnStop.disabled = false;  // 保持停止按钮可用
+		btnConnect.disabled = true;
 	}
 	
 	 
