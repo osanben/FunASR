@@ -278,14 +278,16 @@ function play_file()
           audio_record.controls=true;
 		  //audio_record.play();  //not auto play
 }
-function start_file_send()
+async function start_file_send()
 {
 	console.log("=== start_file_send called ===");
 	console.log("file_data_array type:", file_data_array.constructor.name, "length:", file_data_array.length);
+	console.log("File size:", (file_data_array.byteLength / 1024 / 1024).toFixed(2), "MB");
 	console.log("file_ext:", file_ext);
 	console.log("file_sample_rate:", file_sample_rate);
  
 	var audioData;
+	var startTime = Date.now();
  
 	// 检查文件数据格式
 	if (file_data_array instanceof ArrayBuffer) {
@@ -342,27 +344,43 @@ function start_file_send()
  
 	var chunk_size=960; // for asr chunk_size [5, 10, 5]
 	console.log("File mode chunk_size:", chunk_size);
+	console.log("Total samples to send:", sampleBuf.length);
+	console.log("Estimated chunks:", Math.ceil(sampleBuf.length / chunk_size));
+	console.log("Estimated duration:", (sampleBuf.length / 16000).toFixed(2), "seconds");
+ 
+	var totalChunks = Math.ceil(sampleBuf.length / chunk_size);
+	var sentChunks = 0;
  
 	while(sampleBuf.length>=chunk_size){
-		console.log("=== Sending file chunk ===");
+		sentChunks++;
+		var progress = ((sentChunks / totalChunks) * 100).toFixed(1);
+		console.log("=== Sending chunk", sentChunks, "/", totalChunks, "("+progress+"%) ===");
+		
 		sendBuf=sampleBuf.slice(0,chunk_size);
 		totalsend=totalsend+sendBuf.length;
 		sampleBuf=sampleBuf.slice(chunk_size,sampleBuf.length);
 		
 		// 确保发送正确的16位PCM格式
 		if (sendBuf instanceof Int16Array) {
-			console.log("Sending Int16Array chunk, length:", sendBuf.length);
 			var buffer = new ArrayBuffer(sendBuf.length * 2);
 			var view = new Int16Array(buffer);
 			view.set(sendBuf);
-			console.log("Sending buffer size:", buffer.byteLength, "first 4 bytes:", new Uint8Array(buffer.slice(0,4)));
 			wsconnecter.wsSend(buffer);
 		} else {
 			console.log("Sending Uint8Array chunk (legacy), length:", sendBuf.length);
 			wsconnecter.wsSend(sendBuf);
 		}
 		
+		// 更新界面进度
+		info_div.innerHTML = "发送进度: " + progress + "% (" + sentChunks + "/" + totalChunks + " chunks)";
+		
 		console.log("Remaining sampleBuf length:", sampleBuf.length);
+		
+		// 每50个chunk暂停一下，避免阻塞浏览器
+		if (sentChunks % 50 === 0) {
+			console.log("Pausing after", sentChunks, "chunks to avoid blocking browser...");
+			await new Promise(resolve => setTimeout(resolve, 10));
+		}
 	}
  
 	// 发送剩余的音频数据
