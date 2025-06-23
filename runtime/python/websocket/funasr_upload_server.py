@@ -1141,7 +1141,7 @@ async def create_http_app():
         });
         
         function connectWebSocket(taskId) {
-            ws = new WebSocket(`ws://localhost:10095`);
+            ws = new WebSocket(`wss://gpu-cqao559xgb-10095.node.inscode.run/`);
             
             ws.onopen = function() {
                 ws.send(JSON.stringify({
