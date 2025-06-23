@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FunASR 文件上传语音识别</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .upload-area {
+            border: 2px dashed #ddd;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .upload-area:hover {
+            border-color: #007bff;
+            background-color: #f8f9fa;
+        }
+        
+        .upload-area.dragover {
+            border-color: #007bff;
+            background-color: #e3f2fd;
+        }
+        
+        #audioFile {
+            margin: 10px 0;
+        }
+        
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+        }
+        
+        button:hover {
+            background-color: #0056b3;
+        }
+        
+        button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+        
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 5px;
+            display: none;
+        }
+        
+        .status.info {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+        
+        .status.success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        
+        .status.error {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #e9ecef;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background-color: #007bff;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        
+        .results {
+            margin-top: 20px;
+            padding: 20px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            display: none;
+        }
+        
+        .result-item {
+            margin: 15px 0;
+            padding: 15px;
+            background: white;
+            border-radius: 5px;
+            border-left: 4px solid #007bff;
+        }
+        
+        .result-item h4 {
+            margin: 0 0 10px 0;
+            color: #007bff;
+        }
+        
+        .timestamp {
+            font-family: monospace;
+            background-color: #f1f3f4;
+            padding: 10px;
+            border-radius: 3px;
+            margin-top: 10px;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        
+        .file-info {
+            background-color: #e9ecef;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 FunASR 文件上传语音识别</h1>
+        
+        <div class="upload-area" id="uploadArea">
+            <p>📁 拖拽音频文件到这里，或点击选择文件</p>
+            <input type="file" id="audioFile" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg" style="display: none;">
+            <button type="button" onclick="document.getElementById('audioFile').click()">选择音频文件</button>
+            <p style="font-size: 12px; color: #666; margin-top: 10px;">
+                支持格式: MP3, WAV, M4A, AAC, FLAC, OGG
+            </p>
+        </div>
+        
+        <div id="fileInfo" class="file-info" style="display: none;"></div>
+        
+        <div style="text-align: center;">
+            <button id="uploadBtn" onclick="uploadFile()" disabled>🚀 上传并识别</button>
+            <button id="clearBtn" onclick="clearResults()">🗑️ 清空结果</button>
+        </div>
+        
+        <div id="status" class="status"></div>
+        
+        <div class="progress-bar" id="progressContainer" style="display: none;">
+            <div class="progress-fill" id="progressFill"></div>
+        </div>
+        
+        <div id="results" class="results"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let currentTaskId = null;
+        let selectedFile = null;
+        
+        // 文件选择处理
+        document.getElementById('audioFile').addEventListener('change', function(e) {
+            handleFileSelect(e.target.files[0]);
+        });
+        
+        // 拖拽上传
+        const uploadArea = document.getElementById('uploadArea');
+        
+        uploadArea.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', function(e) {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', function(e) {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFileSelect(files[0]);
+            }
+        });
+        
+        function handleFileSelect(file) {
+            if (!file) return;
+            
+            // 检查文件类型
+            const allowedTypes = ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/aac', 'audio/flac', 'audio/ogg'];
+            const allowedExtensions = ['.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg'];
+            
+            const fileExt = '.' + file.name.split('.').pop().toLowerCase();
+            
+            if (!allowedTypes.includes(file.type) && !allowedExtensions.includes(fileExt)) {
+                showStatus('error', '❌ 不支持的文件格式！请选择音频文件。');
+                return;
+            }
+            
+            selectedFile = file;
+            
+            // 显示文件信息
+            const fileInfo = document.getElementById('fileInfo');
+            fileInfo.innerHTML = `
+                <strong>📄 文件信息:</strong><br>
+                文件名: ${file.name}<br>
+                大小: ${(file.size / 1024 / 1024).toFixed(2)} MB<br>
+                类型: ${file.type || '未知'}
+            `;
+            fileInfo.style.display = 'block';
+            
+            // 启用上传按钮
+            document.getElementById('uploadBtn').disabled = false;
+            
+            showStatus('info', '✅ 文件已选择，点击"上传并识别"开始处理');
+        }
+        
+        async function uploadFile() {
+            if (!selectedFile) {
+                showStatus('error', '❌ 请先选择音频文件');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('audio_file', selectedFile);
+            
+            try {
+                // 禁用按钮
+                document.getElementById('uploadBtn').disabled = true;
+                
+                showStatus('info', '📤 正在上传文件...');
+                showProgress(0);
+                
+                const response = await fetch('http://localhost:8080/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    currentTaskId = result.task_id;
+                    showStatus('success', `✅ 上传成功！任务ID: ${currentTaskId}`);
+                    
+                    // 建立WebSocket连接
+                    connectWebSocket(currentTaskId);
+                } else {
+                    showStatus('error', `❌ 上传失败: ${result.error}`);
+                    document.getElementById('uploadBtn').disabled = false;
+                }
+            } catch (error) {
+                showStatus('error', `❌ 上传失败: ${error.message}`);
+                document.getElementById('uploadBtn').disabled = false;
+            }
+        }
+        
+        function connectWebSocket(taskId) {
+            ws = new WebSocket('ws://localhost:10095');
+            
+            ws.onopen = function() {
+                console.log('WebSocket连接已建立');
+                ws.send(JSON.stringify({
+                    type: 'register',
+                    task_id: taskId
+                }));
+            };
+            
+            ws.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                console.log('收到消息:', data);
+                
+                if (data.type === 'progress') {
+                    showStatus('info', `🔄 ${data.message}`);
+                    showProgress(data.progress);
+                    
+                    if (data.status === 'completed' && data.results) {
+                        showResults(data.results, data.file_info);
+                        document.getElementById('uploadBtn').disabled = false;
+                        hideProgress();
+                    } else if (data.status === 'error') {
+                        showStatus('error', `❌ 处理失败: ${data.message}`);
+                        document.getElementById('uploadBtn').disabled = false;
+                        hideProgress();
+                    }
+                }
+            };
+            
+            ws.onerror = function(error) {
+                console.error('WebSocket错误:', error);
+                showStatus('error', '❌ WebSocket连接错误');
+            };
+            
+            ws.onclose = function() {
+                console.log('WebSocket连接已关闭');
+            };
+        }
+        
+        function showStatus(type, message) {
+            const status = document.getElementById('status');
+            status.className = `status ${type}`;
+            status.innerHTML = message;
+            status.style.display = 'block';
+        }
+        
+        function showProgress(percent) {
+            const container = document.getElementById('progressContainer');
+            const fill = document.getElementById('progressFill');
+            
+            container.style.display = 'block';
+            fill.style.width = percent + '%';
+        }
+        
+        function hideProgress() {
+            document.getElementById('progressContainer').style.display = 'none';
+        }
+        
+        function showResults(results, fileInfo) {
+            const resultsDiv = document.getElementById('results');
+            let html = '<h3>🎯 识别结果</h3>';
+            
+            if (fileInfo) {
+                html += `
+                    <div class="file-info">
+                        <strong>📊 音频信息:</strong><br>
+                        时长: ${fileInfo.duration.toFixed(2)} 秒<br>
+                        采样率: ${fileInfo.sample_rate} Hz<br>
+                        采样点数: ${fileInfo.samples.toLocaleString()}
+                    </div>
+                `;
+            }
+            
+            for (const [modelName, result] of Object.entries(results)) {
+                html += `
+                    <div class="result-item">
+                        <h4>🤖 ${modelName.toUpperCase()} 模型结果</h4>
+                        <p><strong>识别文本:</strong></p>
+                        <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 10px 0; line-height: 1.6;">
+                            ${result.text || '(无识别结果)'}
+                        </div>
+                        
+                        ${result.language ? `<p><strong>检测语言:</strong> ${result.language}</p>` : ''}
+                        
+                        ${result.timestamp ? `
+                            <p><strong>时间戳:</strong></p>
+                            <div class="timestamp">${result.timestamp}</div>
+                        ` : ''}
+                    </div>
+                `;
+            }
+            
+            resultsDiv.innerHTML = html;
+            resultsDiv.style.display = 'block';
+        }
+        
+        function clearResults() {
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('fileInfo').style.display = 'none';
+            document.getElementById('status').style.display = 'none';
+            hideProgress();
+            
+            selectedFile = null;
+            document.getElementById('audioFile').value = '';
+            document.getElementById('uploadBtn').disabled = true;
+            
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+    </script>
+</body>
+</html> 

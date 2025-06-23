@@ -138,10 +138,10 @@ if args.model_type in ["whisper", "hybrid"]:
         import whisper
         import torch
         
-        # 检测设备并设置正确的数据类型
-        if args.device == "mps" and torch.backends.mps.is_available():
-            device = "mps"
-            print("🍎 使用 Apple Silicon MPS 设备")
+        # M3芯片的MPS有稀疏张量兼容性问题，Whisper强制使用CPU
+        if args.device == "mps":
+            device = "cpu"
+            print("🍎 M3芯片检测到，Whisper使用CPU避免MPS兼容性问题")
         elif args.device == "cuda" and torch.cuda.is_available():
             device = "cuda"
         else:
@@ -319,16 +319,79 @@ async def process_audio_with_model(websocket, audio_data):
                 
             print(f"🔧 ASR音频数据: 类型={audio_data_asr.dtype}, 范围=[{audio_data_asr.min():.3f}, {audio_data_asr.max():.3f}]")
             
-            # 使用FunASR处理 - 初始化完整的缓存状态
-            cache_state = {
+            # 文件模式需要基本缓存结构（但不用于流式状态）
+            print("📄 使用离线模式处理完整音频文件")
+            # 初始化完整的缓存结构，包含所有子模型需要的键
+            import torch
+            
+            # 使用FunASR原生的Stats类定义
+            from funasr.models.fsmn_vad_streaming.model import VadStateMachine
+            
+            class CompleteStats:
+                def __init__(self, sil_pdf_ids=[0], max_end_sil_frame_cnt_thresh=650, speech_noise_thres=0.6):
+                    self.data_buf_start_frame = 0
+                    self.frm_cnt = 0
+                    self.latest_confirmed_speech_frame = 0
+                    self.lastest_confirmed_silence_frame = -1
+                    self.continous_silence_frame_count = 0
+                    self.vad_state_machine = VadStateMachine.kVadInStateStartPointNotDetected
+                    self.confirmed_start_frame = -1
+                    self.confirmed_end_frame = -1
+                    self.number_end_time_detected = 0
+                    self.sil_frame = 0
+                    self.sil_pdf_ids = sil_pdf_ids
+                    self.noise_average_decibel = -100.0
+                    self.pre_end_silence_detected = False
+                    self.next_seg = True
+                    
+                    self.output_data_buf = []
+                    self.output_data_buf_offset = 0
+                    self.frame_probs = []
+                    self.max_end_sil_frame_cnt_thresh = max_end_sil_frame_cnt_thresh
+                    self.speech_noise_thres = speech_noise_thres
+                    self.scores = None
+                    self.max_time_out = False
+                    self.decibel = []
+                    self.data_buf = None
+                    self.data_buf_all = None
+                    self.waveform = None
+                    self.last_drop_frames = 0
+                    
+            stats_obj = CompleteStats()
+            
+            # 创建windows_detector对象
+            from funasr.models.fsmn_vad_streaming.model import WindowDetector
+            windows_detector = WindowDetector(200, 150, 150, 10)  # 使用默认参数
+            
+            offline_cache = {
+                # 标点符号模型需要
                 "pre_text": [],
                 "cache": {},
-                "is_final": False
+                "is_final": False,
+                # VAD模型需要
+                "prev_samples": torch.tensor([]),
+                "cache_p": [],
+                "cache_states": None,
+                "cache_feats": None,
+                "stats": stats_obj,  # 添加stats对象
+                "windows_detector": windows_detector,  # 添加窗口检测器
+                "encoder": {},  # VAD编码器缓存
+                "decoder": {},  # VAD解码器缓存
+                # Frontend需要
+                "frontend": {},
+                # ASR模型需要
+                "encoder_out": None,
+                "predictor_out": None,
+                # 其他可能需要的缓存
+                "asr_cache": {},
+                "vad_cache": {},
+                "punc_cache": {},
+                "spk_cache": {}
             }
             
             paraformer_result = model_asr.generate(
                 input=audio_data_asr,
-                cache=cache_state,
+                cache=offline_cache,
                 language="auto",
                 use_itn=True,
                 batch_size_s=60,
@@ -350,16 +413,43 @@ async def process_audio_with_model(websocket, audio_data):
             if audio_data_sv.max() > 1.0 or audio_data_sv.min() < -1.0:
                 audio_data_sv = audio_data_sv / 32768.0
                 
-            # 初始化SenseVoice缓存状态
-            sv_cache_state = {
+            # 文件模式需要基本缓存结构
+            print("📄 SenseVoice使用离线模式处理")
+            import torch
+            
+            # SenseVoice使用相同的完整Stats类
+            stats_obj_sv = CompleteStats()
+            windows_detector_sv = WindowDetector(200, 150, 150, 10)
+            
+            sv_offline_cache = {
+                # 标点符号模型需要
                 "pre_text": [],
                 "cache": {},
-                "is_final": False
+                "is_final": False,
+                # VAD模型需要
+                "prev_samples": torch.tensor([]),
+                "cache_p": [],
+                "cache_states": None,
+                "cache_feats": None,
+                "stats": stats_obj_sv,  # 添加stats对象
+                "windows_detector": windows_detector_sv,  # 添加窗口检测器
+                "encoder": {},  # VAD编码器缓存
+                "decoder": {},  # VAD解码器缓存
+                # Frontend需要
+                "frontend": {},
+                # ASR模型需要
+                "encoder_out": None,
+                "predictor_out": None,
+                # 其他可能需要的缓存
+                "asr_cache": {},
+                "vad_cache": {},
+                "punc_cache": {},
+                "spk_cache": {}
             }
             
             sensevoice_result = model_asr.generate(
                 input=audio_data_sv,
-                cache=sv_cache_state,
+                cache=sv_offline_cache,
                 language="auto", 
                 use_itn=True,
                 batch_size_s=60,

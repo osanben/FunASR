@@ -142,11 +142,19 @@ var readWavInfo=function(bytes){
 	return null;
 };
 
+// 添加文件处理状态标志
+var fileProcessing = false;
+
 upfile.onchange = function () {
 　　　　　　var len = this.files.length;  
             for(let i = 0; i < len; i++) {
 				file_ext=this.files[i].name.split('.').pop().toLowerCase();
 				console.log("File extension:", file_ext);
+				
+				// 重置文件数据和状态
+				file_data_array = undefined;
+				fileProcessing = true;
+				info_div.innerHTML='正在加载文件，请稍候...';
 				
 				if (file_ext === "mp3" || file_ext === "m4a" || file_ext === "aac") {
 					// 对于压缩音频格式，使用Audio元素解码
@@ -215,18 +223,25 @@ upfile.onchange = function () {
 								// 存储为ArrayBuffer
 								file_data_array = pcmData.buffer;
 								file_sample_rate = targetSampleRate;
+								fileProcessing = false;
 								
-								info_div.innerHTML='请点击连接进行识别';
+								info_div.innerHTML='✅ 文件加载完成！请点击连接进行识别';
 								URL.revokeObjectURL(objectURL);
 							})
 							.catch(error => {
 								console.error("Audio decoding failed:", error);
+								fileProcessing = false;
+								file_data_array = undefined;
+								info_div.innerHTML='❌ 音频解码失败';
 								alert("音频解码失败：" + error.message + "\n请尝试使用WAV格式的音频文件。");
 							});
 					});
 					
 					audioElement.addEventListener('error', function(e) {
 						console.error("Audio loading failed:", e);
+						fileProcessing = false;
+						file_data_array = undefined;
+						info_div.innerHTML='❌ 音频加载失败';
 						alert("音频加载失败，请检查文件格式。");
 					});
 					
@@ -240,11 +255,15 @@ upfile.onchange = function () {
 					fileAudio.onload = function() {
 						audioblob = fileAudio.result;
 						file_data_array=audioblob;
-						info_div.innerHTML='请点击连接进行识别';
+						fileProcessing = false;
+						info_div.innerHTML='✅ 文件加载完成！请点击连接进行识别';
 					}
 
 					fileAudio.onerror = function(e) {
 						console.log('error' + e);
+						fileProcessing = false;
+						file_data_array = undefined;
+						info_div.innerHTML='❌ 文件读取失败';
 					}
 				}
             }
@@ -281,8 +300,34 @@ function play_file()
 async function start_file_send()
 {
 	console.log("=== start_file_send called ===");
-	console.log("file_data_array type:", file_data_array.constructor.name, "length:", file_data_array.length);
-	console.log("File size:", (file_data_array.byteLength / 1024 / 1024).toFixed(2), "MB");
+	
+	// 检查文件是否正在处理
+	if (fileProcessing) {
+		console.error("❌ 错误：文件正在加载中！");
+		info_div.innerHTML = "❌ 错误：文件正在加载中，请等待加载完成！";
+		return;
+	}
+	
+	// 检查是否已选择文件
+	if (typeof file_data_array === 'undefined' || !file_data_array) {
+		console.error("❌ 错误：未选择文件！");
+		info_div.innerHTML = "❌ 错误：请先选择音频文件！";
+		btnStart.disabled = false;
+		btnConnect.disabled = false;
+		return;
+	}
+	
+	// 检查WebSocket连接状态
+	if (typeof wsconnecter === 'undefined' || !wsconnecter) {
+		console.error("❌ 错误：WebSocket连接器未初始化！");
+		info_div.innerHTML = "❌ 错误：请先点击连接按钮建立WebSocket连接！";
+		btnStart.disabled = false;
+		btnConnect.disabled = false;
+		return;
+	}
+	
+	console.log("file_data_array type:", file_data_array ? file_data_array.constructor.name : "undefined", "length:", file_data_array ? file_data_array.length : 0);
+	console.log("File size:", file_data_array && file_data_array.byteLength ? (file_data_array.byteLength / 1024 / 1024).toFixed(2) + " MB" : "unknown");
 	console.log("file_ext:", file_ext);
 	console.log("file_sample_rate:", file_sample_rate);
  
@@ -637,6 +682,23 @@ function record()
 function start() {
 	console.log("=== start() called ===");
 	
+	// 如果是文件模式，检查文件状态
+	if (isfilemode) {
+		// 检查文件是否正在处理
+		if (fileProcessing) {
+			console.error("❌ 错误：文件正在加载中！");
+			info_div.innerHTML = "❌ 错误：文件正在加载中，请等待加载完成！";
+			return 0;
+		}
+		
+		// 检查是否已选择文件
+		if (typeof file_data_array === 'undefined' || !file_data_array) {
+			console.error("❌ 错误：未选择文件！");
+			info_div.innerHTML = "❌ 错误：请先选择音频文件！";
+			return 0;
+		}
+	}
+	
 	// 清除显示
 	clear();
 	//控件状态更新
@@ -654,7 +716,7 @@ function start() {
 		btnStart.disabled = true;
 		btnStop.disabled = true;
 		btnConnect.disabled=true;
- 
+
         return 1;
 	}
 	else
@@ -663,7 +725,7 @@ function start() {
 		btnStart.disabled = true;
 		btnStop.disabled = true;
 		btnConnect.disabled=false;
- 
+
 		return 0;
 	}
 }
