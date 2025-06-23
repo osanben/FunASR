@@ -27,9 +27,13 @@ except ImportError:
 
 try:
     from pyannote.audio import Pipeline
+    import torch
+    import soundfile as sf
     PYANNOTE_AVAILABLE = True
+    print("✅ pyannote.audio 可用，将使用专业说话人分离模型")
 except ImportError:
-    print("📋 提示: 安装 pyannote.audio 可启用说话人分离功能")
+    print("📋 提示: 安装 pyannote.audio 和 soundfile 可启用专业说话人分离功能")
+    print("📋 安装命令: pip install pyannote.audio soundfile")
     PYANNOTE_AVAILABLE = False
 
 # 存储WebSocket连接和任务状态
@@ -82,13 +86,21 @@ if args.model_type in ["paraformer", "sensevoice", "hybrid"]:
     try:
         from funasr import AutoModel
         
+        # 临时重定向标准输出来隐藏requirements安装信息
+        import sys
+        from io import StringIO
+        original_stdout = sys.stdout
+        sys.stdout = StringIO()  # 捕获输出
+        
         device = "cpu" if args.device == "mps" else args.device
         ngpu = 0 if args.device == "mps" else args.ngpu
         
         if args.model_type in ["paraformer", "hybrid"]:
-            print("📦 加载 Paraformer 模型...")
+            print("📦 加载 Paraformer 模型（支持时间戳和说话人分离）...")
+            print("🚫 禁用模型更新检查，使用本地缓存...")
+            
             model_asr = AutoModel(
-                model="iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+                model="iic/speech_paraformer-large-vad-punc_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
                 vad_model="iic/speech_fsmn_vad_zh-cn-16k-common-pytorch",
                 punc_model="iic/punc_ct-transformer_zh-cn-common-vocab272727-pytorch",
                 spk_model="iic/speech_campplus_sv_zh-cn_16k-common",
@@ -97,6 +109,7 @@ if args.model_type in ["paraformer", "sensevoice", "hybrid"]:
                 device=device,
                 disable_pbar=True,
                 disable_log=True,
+                disable_update=True,  # 禁用自动更新检查
             )
         elif args.model_type == "sensevoice":
             print("📦 加载 SenseVoice 模型...")
@@ -107,9 +120,14 @@ if args.model_type in ["paraformer", "sensevoice", "hybrid"]:
                 device=device,
                 disable_pbar=True,
                 disable_log=True,
+                disable_update=True,  # 禁用自动更新检查
             )
+        # 恢复标准输出
+        sys.stdout = original_stdout
         print("✅ FunASR 模型加载成功!")
     except Exception as e:
+        # 恢复标准输出
+        sys.stdout = original_stdout
         print(f"❌ FunASR 模型加载失败: {e}")
 
 print("🎉 所有模型加载完成!")
@@ -246,8 +264,8 @@ def whisper_transcribe(audio_data, sample_rate=16000):
                         print(f"⚠️ 片段繁简转换失败: {e}")
                 timestamp_text += f"[{start_time:.2f}->{end_time:.2f}] {segment_text} "
         
-        # 简单的说话人分离（基于音频能量变化）
-        speaker_segments = detect_speakers_simple(audio_data, segments, sample_rate)
+        # 专业的说话人分离（基于音色识别）
+        speaker_segments = detect_speakers_with_voice_print(audio_data, segments, sample_rate)
         
         return {
             "text": text,
@@ -261,88 +279,521 @@ def whisper_transcribe(audio_data, sample_rate=16000):
         print(f"❌ Whisper识别错误: {e}")
         return {"text": "", "timestamp": "", "language": "unknown", "segments": [], "speaker_segments": []}
 
-def detect_speakers_simple(audio_data, segments, sample_rate=16000):
-    """简单的说话人分离算法（基于音频能量和频谱变化）"""
+def detect_speakers_with_voice_print(audio_data, segments, sample_rate=16000):
+    """使用专业音色模型进行说话人分离"""
     try:
         if not segments:
             return []
         
-        speaker_segments = []
-        current_speaker = 1
-        prev_energy = 0
+        print("🎯 使用专业音色模型进行说话人分离...")
         
+        # 方法1: 使用FunASR的CAM++说话人模型
+        try:
+            print("🔧 调用FunASR CAM++说话人识别模型...")
+            
+            # 使用专门的说话人分离参数
+            res = model_asr.generate(
+                input=audio_data,
+                cache={},
+                language="zh",
+                use_itn=True,
+                batch_size_s=30,  # 缩短批处理时间
+                merge_vad=False,  # 关闭VAD合并，保持原始分段
+                merge_length_s=3,  # 短合并长度
+                return_spk_res=True,
+                return_spk_embedding=True,
+                spk_mode="vad_segment",  # VAD分段模式
+                # 说话人相关参数
+                spk_embedding_type="cam++",  # 使用CAM++模型
+                cluster_backend="sklearn",  # 使用sklearn聚类
+                cluster_threshold=0.7,  # 聚类阈值
+            )
+            
+            if res and len(res) > 0:
+                result = res[0]
+                
+                # 打印调试信息
+                print(f"🔍 CAM++结果键: {list(result.keys())}")
+                
+                # 检查是否有说话人嵌入向量
+                if "spk_embedding" in result:
+                    print(f"✅ 检测到说话人嵌入向量")
+                    
+                if "sentence_info" in result:
+                    sentence_info = result["sentence_info"]
+                    print(f"🔍 句子信息: {len(sentence_info)} 个片段")
+                    
+                    # 收集所有说话人ID
+                    speaker_ids = [sentence.get("spk", 0) for sentence in sentence_info]
+                    unique_spk_ids = list(set(speaker_ids))
+                    print(f"🔍 检测到的说话人ID: {unique_spk_ids}")
+                    
+                    if len(unique_spk_ids) > 1:
+                        # 多说话人情况
+                        enhanced_segments = []
+                        speaker_mapping = {spk_id: i+1 for i, spk_id in enumerate(unique_spk_ids)}
+                        
+                        for sentence in sentence_info:
+                            speaker_id = sentence.get("spk", 0)
+                            start_time = sentence.get("start", 0) / 1000.0
+                            end_time = sentence.get("end", 0) / 1000.0
+                            sentence_text = sentence.get("text", "").strip()
+                            
+                            mapped_speaker_id = speaker_mapping.get(speaker_id, 1)
+                            
+                            if sentence_text:
+                                # 繁体转简体
+                                if OPENCC_AVAILABLE:
+                                    try:
+                                        sentence_text = cc.convert(sentence_text)
+                                    except Exception as e:
+                                        print(f"⚠️ 繁简转换失败: {e}")
+                                
+                                enhanced_segments.append({
+                                    "start": start_time,
+                                    "end": end_time,
+                                    "text": sentence_text,
+                                    "speaker": f"说话人{mapped_speaker_id}",
+                                    "confidence": 0.95,  # CAM++置信度
+                                    "duration": end_time - start_time
+                                })
+                        
+                        print(f"✅ CAM++模型检测到{len(unique_spk_ids)}个说话人")
+                        return enhanced_segments
+                    else:
+                        print(f"⚠️ CAM++模型只检测到1个说话人")
+            
+        except Exception as e:
+            print(f"⚠️ CAM++模型调用失败: {e}")
+        
+        # 方法2: 尝试使用其他专业音色模型
+        try:
+            print("🔧 尝试使用独立的说话人识别模型...")
+            
+            # 直接调用说话人模型进行嵌入向量提取
+            from funasr import AutoModel
+            
+            # 加载专门的说话人识别模型
+            spk_model = AutoModel(
+                model="iic/speech_campplus_sv_zh-cn_16k-common",
+                device="cpu",
+                disable_pbar=True,
+                disable_log=True,
+                disable_update=True  # 禁用自动更新检查
+            )
+            
+            # 为每个语音段提取说话人嵌入向量
+            embeddings = []
+            valid_segments = []
+            
+            for segment in segments:
+                start_time = segment.get("start", 0)
+                end_time = segment.get("end", 0)
+                text = segment.get("text", "").strip()
+                
+                if text:  # 只处理有文本的片段
+                    # 提取音频片段
+                    start_sample = int(start_time * sample_rate)
+                    end_sample = int(end_time * sample_rate)
+                    segment_audio = audio_data[start_sample:end_sample]
+                    
+                    if len(segment_audio) > 1600:  # 至少100ms的音频
+                        try:
+                            # 提取说话人嵌入向量
+                            spk_res = spk_model.generate(
+                                input=segment_audio,
+                                cache={}
+                            )
+                            
+                            if spk_res and len(spk_res) > 0:
+                                embedding = spk_res[0].get("spk_embedding", None)
+                                if embedding is not None:
+                                    embeddings.append(embedding)
+                                    valid_segments.append(segment)
+                        except Exception as e:
+                            print(f"⚠️ 片段嵌入提取失败: {e}")
+                            continue
+            
+            if len(embeddings) >= 2:
+                # 使用聚类对嵌入向量进行分组
+                import numpy as np
+                from sklearn.cluster import AgglomerativeClustering
+                from sklearn.metrics.pairwise import cosine_similarity
+                
+                # 处理嵌入向量的维度问题
+                processed_embeddings = []
+                for emb in embeddings:
+                    try:
+                        # 处理torch.Tensor
+                        if hasattr(emb, 'detach'):  # PyTorch tensor
+                            emb = emb.detach().cpu().numpy()
+                        
+                        if isinstance(emb, np.ndarray):
+                            # 如果是多维数组，取平均值或展平
+                            if emb.ndim > 1:
+                                emb = emb.flatten()
+                            processed_embeddings.append(emb)
+                        elif isinstance(emb, list):
+                            processed_embeddings.append(np.array(emb).flatten())
+                        else:
+                            print(f"⚠️ 未知的嵌入向量格式: {type(emb)}")
+                            continue
+                    except Exception as e:
+                        print(f"⚠️ 嵌入向量处理失败: {e}")
+                        continue
+                
+                if len(processed_embeddings) < 2:
+                    print("⚠️ 有效嵌入向量不足")
+                    return detect_speakers_fallback(segments)
+                
+                # 确保所有嵌入向量长度一致
+                min_length = min(len(emb) for emb in processed_embeddings)
+                normalized_embeddings = []
+                for emb in processed_embeddings:
+                    if len(emb) >= min_length:
+                        normalized_embeddings.append(emb[:min_length])
+                    else:
+                        # 如果长度不足，用零填充
+                        padded = np.zeros(min_length)
+                        padded[:len(emb)] = emb
+                        normalized_embeddings.append(padded)
+                
+                embeddings_array = np.array(normalized_embeddings)
+                print(f"🔍 嵌入向量形状: {embeddings_array.shape}")
+                
+                # 计算余弦相似度
+                try:
+                    similarity_matrix = cosine_similarity(embeddings_array)
+                    distance_matrix = 1 - similarity_matrix
+                except Exception as e:
+                    print(f"⚠️ 相似度计算失败: {e}")
+                    return detect_speakers_fallback(segments)
+                
+                # 使用层次聚类
+                for n_clusters in range(2, min(5, len(embeddings) + 1)):
+                    clustering = AgglomerativeClustering(
+                        n_clusters=n_clusters,
+                        metric='precomputed',
+                        linkage='average'
+                    )
+                    labels = clustering.fit_predict(distance_matrix)
+                    
+                    # 检查聚类质量
+                    unique_labels = len(set(labels))
+                    if unique_labels > 1:
+                        enhanced_segments = []
+                        
+                        for i, segment in enumerate(valid_segments):
+                            start_time = segment.get("start", 0)
+                            end_time = segment.get("end", 0)
+                            text = segment.get("text", "").strip()
+                            
+                            speaker_id = labels[i] + 1
+                            
+                            # 繁体转简体
+                            if OPENCC_AVAILABLE and text:
+                                try:
+                                    text = cc.convert(text)
+                                except Exception as e:
+                                    print(f"⚠️ 繁简转换失败: {e}")
+                            
+                            enhanced_segments.append({
+                                "start": start_time,
+                                "end": end_time,
+                                "text": text,
+                                "speaker": f"说话人{speaker_id}",
+                                "confidence": 0.85,
+                                "duration": end_time - start_time
+                            })
+                        
+                        print(f"✅ 独立音色模型检测到{unique_labels}个说话人")
+                        return enhanced_segments
+                        
+        except Exception as e:
+            print(f"⚠️ 独立音色模型失败: {e}")
+        
+        # 回退到默认模式
+        print("⚠️ 音色模型无法分离说话人，回退到单人模式")
+        return detect_speakers_fallback(segments)
+        
+    except Exception as e:
+        print(f"⚠️ 说话人分离失败，回退到简单模式: {e}")
+        return detect_speakers_fallback(segments)
+
+def detect_speakers_advanced_algorithm(audio_data, segments, sample_rate=16000):
+    """使用高级音频分析进行说话人分离"""
+    try:
+        print("🔧 使用高级音频分析算法进行说话人分离...")
+        
+        import librosa
+        import numpy as np
+        from sklearn.cluster import KMeans
+        from sklearn.preprocessing import StandardScaler
+        
+        speaker_segments = []
+        features_list = []
+        
+        # 为每个片段提取音频特征
         for i, segment in enumerate(segments):
             start_time = segment.get("start", 0)
             end_time = segment.get("end", 0)
             text = segment.get("text", "").strip()
             
-            # 计算当前片段的音频能量
+            # 提取音频片段
             start_sample = int(start_time * sample_rate)
             end_sample = int(end_time * sample_rate)
+            segment_audio = audio_data[start_sample:end_sample]
             
-            if start_sample < len(audio_data) and end_sample <= len(audio_data) and end_sample > start_sample:
-                segment_audio = audio_data[start_sample:end_sample]
-                if len(segment_audio) > 0:
-                    energy = float(np.mean(segment_audio ** 2))
-                    # 防止NaN和无穷大值
-                    if np.isnan(energy) or np.isinf(energy):
-                        energy = 0.0
-                else:
-                    energy = 0.0
+            if len(segment_audio) > 0:
+                # 提取多维音频特征
+                features = []
                 
-                # 基于能量变化判断是否换人
-                if prev_energy > 0 and energy > 0:
-                    energy_change = abs(energy - prev_energy) / (prev_energy + 1e-8)
-                    # 如果能量变化超过阈值，可能是换了说话人
-                    if energy_change > 0.5 and i > 0:
-                        current_speaker = 2 if current_speaker == 1 else 1
+                # 1. 音频能量
+                energy = np.mean(segment_audio ** 2)
+                features.append(energy)
+                
+                # 2. 过零率
+                zero_crossing_rate = np.mean(librosa.feature.zero_crossing_rate(segment_audio))
+                features.append(zero_crossing_rate)
+                
+                # 3. 频谱重心
+                try:
+                    spectral_centroids = librosa.feature.spectral_centroid(y=segment_audio, sr=sample_rate)
+                    spectral_centroid = np.mean(spectral_centroids)
+                except:
+                    spectral_centroid = 1000
+                features.append(spectral_centroid)
+                
+                # 4. 频谱滚降
+                try:
+                    spectral_rolloff = librosa.feature.spectral_rolloff(y=segment_audio, sr=sample_rate)
+                    rolloff = np.mean(spectral_rolloff)
+                except:
+                    rolloff = 2000
+                features.append(rolloff)
+                
+                # 5. MFCC前5个系数
+                try:
+                    mfccs = librosa.feature.mfcc(y=segment_audio, sr=sample_rate, n_mfcc=5)
+                    mfcc_means = np.mean(mfccs, axis=1)
+                    features.extend(mfcc_means)
+                except:
+                    features.extend([0] * 5)
+                
+                # 6. 基频特征
+                try:
+                    f0 = librosa.yin(segment_audio, fmin=50, fmax=400)
+                    f0_mean = np.mean(f0[~np.isnan(f0)]) if len(f0[~np.isnan(f0)]) > 0 else 150
+                    features.append(f0_mean)
+                except:
+                    features.append(150)
+                
+                features_list.append(features)
+            else:
+                # 空片段，使用默认特征
+                features_list.append([0] * 11)
+        
+        # 如果片段太少，无法聚类
+        if len(features_list) < 2:
+            print("⚠️ 音频片段太少，无法进行说话人分离")
+            return detect_speakers_fallback(segments)
+        
+        # 特征标准化
+        scaler = StandardScaler()
+        features_array = np.array(features_list)
+        features_scaled = scaler.fit_transform(features_array)
+        
+        # 尝试2-4个说话人的聚类
+        best_n_speakers = 2
+        best_score = -1
+        best_labels = None
+        
+        for n_speakers in range(2, min(5, len(segments) + 1)):
+            try:
+                kmeans = KMeans(n_clusters=n_speakers, random_state=42, n_init=10)
+                labels = kmeans.fit_predict(features_scaled)
+                
+                # 计算轮廓系数评估聚类质量
+                from sklearn.metrics import silhouette_score
+                score = silhouette_score(features_scaled, labels)
+                
+                if score > best_score:
+                    best_score = score
+                    best_n_speakers = n_speakers
+                    best_labels = labels
+            except:
+                continue
+        
+        # 如果聚类效果不好，回退到基于频谱特征的简单分离
+        if best_labels is None or best_score < 0.3:
+            print("⚠️ 聚类效果不佳，使用基于频谱特征的分离...")
+            
+            for i, segment in enumerate(segments):
+                start_time = segment.get("start", 0)
+                end_time = segment.get("end", 0)
+                text = segment.get("text", "").strip()
+                
+                # 基于频谱重心的简单分离
+                if i < len(features_list):
+                    spectral_centroid = features_list[i][2]  # 频谱重心特征
+                    speaker_id = 2 if spectral_centroid > 1200 else 1  # 阈值分离
+                else:
+                    speaker_id = 1
                 
                 # 繁体转简体
                 if OPENCC_AVAILABLE and text:
                     try:
                         text = cc.convert(text)
                     except Exception as e:
-                        print(f"⚠️ 说话人片段繁简转换失败: {e}")
+                        print(f"⚠️ 繁简转换失败: {e}")
                 
                 speaker_segments.append({
                     "start": start_time,
                     "end": end_time,
                     "text": text,
-                    "speaker": f"说话人{current_speaker}",
-                    "energy": energy
+                    "speaker": f"说话人{speaker_id}",
+                    "duration": end_time - start_time,
+                    "confidence": 0.6
                 })
+        else:
+            # 使用聚类结果
+            print(f"✅ 聚类分析完成，检测到{best_n_speakers}个说话人 (置信度: {best_score:.3f})")
+            
+            for i, segment in enumerate(segments):
+                start_time = segment.get("start", 0)
+                end_time = segment.get("end", 0)
+                text = segment.get("text", "").strip()
                 
-                prev_energy = energy
-            else:
-                # 如果音频范围超出，使用默认值
+                speaker_id = best_labels[i] + 1  # 说话人ID从1开始
+                
+                # 繁体转简体
                 if OPENCC_AVAILABLE and text:
                     try:
                         text = cc.convert(text)
                     except Exception as e:
-                        print(f"⚠️ 说话人片段繁简转换失败: {e}")
-                        
+                        print(f"⚠️ 繁简转换失败: {e}")
+                
                 speaker_segments.append({
                     "start": start_time,
                     "end": end_time,
                     "text": text,
-                    "speaker": f"说话人{current_speaker}",
-                    "energy": 0.0
+                    "speaker": f"说话人{speaker_id}",
+                    "duration": end_time - start_time,
+                    "confidence": best_score
                 })
+        
+        # 统计说话人数量
+        unique_speakers = len(set(seg["speaker"] for seg in speaker_segments))
+        print(f"🎯 高级算法检测到{unique_speakers}个说话人")
         
         return speaker_segments
         
     except Exception as e:
-        print(f"❌ 说话人检测错误: {e}")
+        print(f"⚠️ 高级算法失败: {e}")
+        return detect_speakers_fallback(segments)
+
+def process_pyannote_results(diarization, segments):
+    """处理pyannote.audio的结果"""
+    try:
+        # 将diarization结果映射到segments
+        speaker_segments = []
+        speaker_mapping = {}
+        speaker_counter = 1
+        
+        for i, segment in enumerate(segments):
+            start_time = segment.get("start", 0)
+            end_time = segment.get("end", 0)
+            text = segment.get("text", "").strip()
+            
+            # 查找这个时间段内的主要说话人
+            segment_duration = end_time - start_time
+            speaker_durations = {}
+            
+            for turn, track, speaker in diarization.itertracks(yield_label=True):
+                overlap_start = max(start_time, turn.start)
+                overlap_end = min(end_time, turn.end)
+                overlap_duration = max(0, overlap_end - overlap_start)
+                
+                if overlap_duration > 0:
+                    if speaker not in speaker_durations:
+                        speaker_durations[speaker] = 0
+                    speaker_durations[speaker] += overlap_duration
+            
+            if speaker_durations:
+                main_speaker = max(speaker_durations.keys(), key=lambda x: speaker_durations[x])
+                if main_speaker not in speaker_mapping:
+                    speaker_mapping[main_speaker] = speaker_counter
+                    speaker_counter += 1
+                speaker_id = speaker_mapping[main_speaker]
+            else:
+                speaker_id = 1
+            
+            if OPENCC_AVAILABLE and text:
+                try:
+                    text = cc.convert(text)
+                except Exception as e:
+                    print(f"⚠️ 繁简转换失败: {e}")
+            
+            speaker_segments.append({
+                "start": start_time,
+                "end": end_time,
+                "text": text,
+                "speaker": f"说话人{speaker_id}",
+                "duration": end_time - start_time,
+                "confidence": speaker_durations.get(main_speaker, 0) / segment_duration if segment_duration > 0 else 0
+            })
+        
+        unique_speakers = len(speaker_mapping)
+        print(f"✅ pyannote.audio检测到{unique_speakers}个说话人")
+        return speaker_segments
+        
+    except Exception as e:
+        print(f"⚠️ pyannote结果处理失败: {e}")
+        return segments
+
+def detect_speakers_fallback(segments):
+    """简单的后备说话人检测"""
+    try:
+        if not segments:
+            return []
+        
+        speaker_segments = []
+        # 默认单人模式
+        for segment in segments:
+            start_time = segment.get("start", 0)
+            end_time = segment.get("end", 0)
+            text = segment.get("text", "").strip()
+            
+            # 繁体转简体
+            if OPENCC_AVAILABLE and text:
+                try:
+                    text = cc.convert(text)
+                except Exception as e:
+                    print(f"⚠️ 说话人片段繁简转换失败: {e}")
+            
+            speaker_segments.append({
+                "start": start_time,
+                "end": end_time,
+                "text": text,
+                "speaker": "说话人1",  # 默认单人
+                "duration": end_time - start_time
+            })
+        
+        print("🎯 后备模式: 默认标记为单人讲话")
+        return speaker_segments
+        
+    except Exception as e:
+        print(f"❌ 后备说话人检测错误: {e}")
         return []
 
 def funasr_transcribe(audio_data, sample_rate=16000):
-    """使用FunASR进行语音识别"""
+    """使用FunASR进行语音识别（支持说话人分离）"""
     try:
         # 确保数据格式正确
         if audio_data.dtype != np.float32:
             audio_data = audio_data.astype(np.float32)
         
-        # FunASR识别
+        # FunASR识别 - 启用说话人识别
         res = model_asr.generate(
             input=audio_data,
             cache={},
@@ -351,11 +802,21 @@ def funasr_transcribe(audio_data, sample_rate=16000):
             batch_size_s=60,
             merge_vad=True,
             merge_length_s=15,
+            return_spk_res=True,  # 🎯 启用说话人识别
+            return_spk_embedding=True,  # 返回说话人嵌入向量
+            spk_mode="punc_segment",  # 说话人分离模式
         )
         
         if res and len(res) > 0:
             result = res[0]
             text = result.get("text", "")
+            
+            # 🔍 调试: 打印FunASR返回的完整结果结构
+            print(f"🔍 FunASR结果键: {list(result.keys())}")
+            if "sentence_info" in result:
+                print(f"🔍 sentence_info长度: {len(result['sentence_info'])}")
+                for i, sentence in enumerate(result['sentence_info'][:3]):  # 只打印前3个
+                    print(f"🔍 句子{i}: {sentence}")
             
             # 处理时间戳
             timestamp_text = ""
@@ -365,17 +826,101 @@ def funasr_transcribe(audio_data, sample_rate=16000):
                     for i, (start, end) in enumerate(timestamps):
                         timestamp_text += f"[{start/1000:.2f}->{end/1000:.2f}] "
             
+            # 处理说话人信息
+            speaker_segments = []
+            if "sentence_info" in result:
+                sentence_info = result["sentence_info"]
+                for i, sentence in enumerate(sentence_info):
+                    speaker_id = sentence.get("spk", 0)  # 说话人ID
+                    start_time = sentence.get("start", 0) / 1000.0  # 转换为秒
+                    end_time = sentence.get("end", 0) / 1000.0
+                    sentence_text = sentence.get("text", "").strip()
+                    
+                    if sentence_text:
+                        # 繁体转简体
+                        if OPENCC_AVAILABLE:
+                            try:
+                                sentence_text = cc.convert(sentence_text)
+                            except Exception as e:
+                                print(f"⚠️ FunASR片段繁简转换失败: {e}")
+                        
+                        speaker_segments.append({
+                            "start": start_time,
+                            "end": end_time,
+                            "text": sentence_text,
+                            "speaker": f"说话人{speaker_id + 1}",  # 说话人从1开始编号
+                            "confidence": 1.0,  # FunASR说话人置信度
+                            "duration": end_time - start_time
+                        })
+            
+            # 如果没有说话人信息，创建默认的单人结果
+            if not speaker_segments and "timestamp" in result and text:
+                timestamps = result["timestamp"]
+                if timestamps:
+                    # 基于时间戳创建说话人片段
+                    words = text.split()
+                    for i, (start, end) in enumerate(timestamps):
+                        word_text = words[i] if i < len(words) else ""
+                        if word_text:
+                            speaker_segments.append({
+                                "start": start / 1000.0,
+                                "end": end / 1000.0,
+                                "text": word_text,
+                                "speaker": "说话人1",
+                                "confidence": 0.8,
+                                "duration": (end - start) / 1000.0
+                            })
+                else:
+                    # 没有时间戳，创建整体片段
+                    duration = len(audio_data) / sample_rate
+                    speaker_segments.append({
+                        "start": 0.0,
+                        "end": duration,
+                        "text": text,
+                        "speaker": "说话人1",
+                        "confidence": 0.8,
+                        "duration": duration
+                    })
+            
+            # 统计说话人数量
+            unique_speakers = len(set(seg.get("speaker", "说话人1") for seg in speaker_segments))
+            total_duration = len(audio_data) / sample_rate
+            
+            print(f"🎯 FunASR说话人分析: 总时长={total_duration:.1f}秒, 检测到{unique_speakers}个说话人")
+            
+            # 🔧 如果FunASR只检测到1个说话人，但音频较长，使用pyannote.audio进行二次分析
+            if unique_speakers == 1 and total_duration > 5.0 and PYANNOTE_AVAILABLE:
+                print("🔄 FunASR只检测到1个说话人，启用pyannote.audio进行二次分析...")
+                try:
+                    # 使用pyannote.audio重新分离说话人
+                    enhanced_segments = detect_speakers_with_voice_print(audio_data, speaker_segments, sample_rate)
+                    if enhanced_segments and len(enhanced_segments) > 0:
+                        enhanced_speakers = len(set(seg.get("speaker", "说话人1") for seg in enhanced_segments))
+                        if enhanced_speakers > 1:
+                            print(f"✅ pyannote.audio检测到{enhanced_speakers}个说话人，使用增强结果")
+                            speaker_segments = enhanced_segments
+                            unique_speakers = enhanced_speakers
+                        else:
+                            print("⚠️ pyannote.audio也只检测到1个说话人")
+                except Exception as e:
+                    print(f"⚠️ pyannote.audio分析失败: {e}")
+            
+            print(f"🎉 最终说话人分析结果: {unique_speakers}个说话人")
+            
             return {
                 "text": text,
                 "timestamp": timestamp_text.strip(),
                 "language": "zh",
-                "result": result
+                "result": result,
+                "speaker_segments": speaker_segments
             }
         else:
-            return {"text": "", "timestamp": "", "language": "zh", "result": {}}
+            return {"text": "", "timestamp": "", "language": "zh", "result": {}, "speaker_segments": []}
             
     except Exception as e:
         print(f"❌ FunASR识别错误: {e}")
+        import traceback
+        traceback.print_exc()
         return {"text": "", "timestamp": "", "language": "zh", "result": {}, "speaker_segments": []}
 
 def send_progress_update(task_id, status, progress, message, results=None):

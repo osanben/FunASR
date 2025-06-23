@@ -20,12 +20,38 @@ python -c "import aiohttp, aiohttp_cors, librosa, websockets" 2>/dev/null || {
     pip install aiohttp aiohttp-cors librosa websockets
 }
 
-# 设置参数
-MODEL_TYPE=${1:-"whisper"}  # 默认使用whisper
-WHISPER_MODEL=${2:-"base"}  # 默认使用base模型
-HTTP_PORT=${3:-8080}        # HTTP端口
-WS_PORT=${4:-10095}         # WebSocket端口
-DEVICE=${5:-"cpu"}          # 设备类型
+# 设置参数 - 支持命名参数和位置参数  
+MODEL_TYPE="whisper"  # 默认使用whisper (可选: whisper, paraformer, sensevoice, hybrid)
+WHISPER_MODEL="base"  # 默认使用base模型
+HTTP_PORT="8080"      # HTTP端口
+WS_PORT="10095"       # WebSocket端口
+DEVICE="cpu"          # 设备类型
+
+# 解析命令行参数
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --model_type)
+            MODEL_TYPE="$2"
+            shift 2
+            ;;
+        --whisper_model)
+            WHISPER_MODEL="$2"
+            shift 2
+            ;;
+        --device)
+            DEVICE="$2"
+            shift 2
+            ;;
+        *)
+            # 位置参数支持
+            if [ -z "$POSITIONAL_SET" ]; then
+                MODEL_TYPE="$1"
+                POSITIONAL_SET="true"
+            fi
+            shift
+            ;;
+    esac
+done
 
 echo "🎯 配置信息:"
 echo "   模型类型: $MODEL_TYPE"
