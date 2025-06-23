@@ -260,7 +260,7 @@
                 showStatus('info', '📤 正在上传文件...');
                 showProgress(0);
                 
-                const response = await fetch('http://localhost:8080/upload', {
+                const response = await fetch('https://gpu-cqao559xgb-8080.node.inscode.run/upload', {
                     method: 'POST',
                     body: formData
                 });
@@ -284,7 +284,7 @@
         }
         
         function connectWebSocket(taskId) {
-            ws = new WebSocket('ws://localhost:10095');
+                            ws = new WebSocket('wss://gpu-cqao559xgb-10095.node.inscode.run/');
             
             ws.onopen = function() {
                 console.log('WebSocket连接已建立');

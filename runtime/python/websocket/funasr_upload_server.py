@@ -46,7 +46,7 @@ executor = ThreadPoolExecutor(max_workers=4)
 
 # 解析命令行参数
 parser = argparse.ArgumentParser()
-parser.add_argument("--host", type=str, default="127.0.0.1", help="WebSocket服务器地址")
+parser.add_argument("--host", type=str, default="0.0.0.0", help="WebSocket服务器地址")
 parser.add_argument("--port", type=int, default=10095, help="WebSocket端口")
 parser.add_argument("--http_port", type=int, default=8080, help="HTTP上传服务端口")
 parser.add_argument("--model_type", type=str, default="whisper", choices=["whisper", "paraformer", "sensevoice", "hybrid"], help="模型类型")
