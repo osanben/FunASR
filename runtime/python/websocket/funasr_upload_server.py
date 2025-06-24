@@ -975,11 +975,23 @@ async def status_handler(request):
 async def realtime_handler(request):
     """实时录音页面处理器"""
     try:
-        with open('realtime_demo.html', 'r', encoding='utf-8') as f:
+        # 获取当前脚本所在目录
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        realtime_file = os.path.join(current_dir, 'realtime_demo.html')
+        
+        print(f"🔍 尝试读取实时录音页面: {realtime_file}")
+        
+        with open(realtime_file, 'r', encoding='utf-8') as f:
             content = f.read()
+        
+        print("✅ 实时录音页面加载成功")
         return web.Response(text=content, content_type='text/html')
-    except FileNotFoundError:
-        return web.Response(text="实时录音页面未找到", status=404)
+    except FileNotFoundError as e:
+        print(f"❌ 实时录音页面未找到: {e}")
+        return web.Response(text=f"实时录音页面未找到: {realtime_file}", status=404)
+    except Exception as e:
+        print(f"❌ 加载实时录音页面错误: {e}")
+        return web.Response(text=f"加载页面错误: {str(e)}", status=500)
 
 # HTTP文件上传处理
 async def upload_handler(request):
@@ -1092,8 +1104,9 @@ async def create_http_app():
     app.router.add_get('/realtime', realtime_handler)
     
     # 添加静态文件路由
-    app.router.add_get('/recorder-core.js', lambda request: web.FileResponse('recorder-core.js'))
-    app.router.add_get('/pcm.js', lambda request: web.FileResponse('pcm.js'))
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    app.router.add_get('/recorder-core.js', lambda request: web.FileResponse(os.path.join(current_dir, 'recorder-core.js')))
+    app.router.add_get('/pcm.js', lambda request: web.FileResponse(os.path.join(current_dir, 'pcm.js')))
     
     # 添加静态文件服务（可选）
     app.router.add_get('/', lambda request: web.Response(text="""
@@ -1157,7 +1170,7 @@ async def create_http_app():
         });
         
         function connectWebSocket(taskId) {
-            ws = new WebSocket(`wss://gpu-cqao559xgb-10095.node.inscode.run/`);
+            ws = new WebSocket(`wss://gpu-pod6859164ddd21426e6e55774b-10095.node.inscode.run/`);
             
             ws.onopen = function() {
                 ws.send(JSON.stringify({
