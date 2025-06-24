@@ -284,7 +284,7 @@
         }
         
         function connectWebSocket(taskId) {
-                            ws = new WebSocket('wss://gpu-cqao559xgb-10095.node.inscode.run/');
+                            ws = new WebSocket('ws://127.0.0.1:10096/');
             
             ws.onopen = function() {
                 console.log('WebSocket连接已建立');

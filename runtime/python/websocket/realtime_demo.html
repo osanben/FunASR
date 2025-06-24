@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FunASR 实时语音识别</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        h1 {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+            font-size: 2.5em;
+            margin: 0;
+        }
+
+        .control-panel {
+            padding: 30px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #495057;
+        }
+
+        .input-group input, .input-group select, .input-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        .input-group input:focus, .input-group select:focus, .input-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 15px;
+            padding: 30px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        .btn-connect, .btn-start, .btn-stop, .btn-clear {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 25px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            min-width: 120px;
+        }
+
+        .btn-connect {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+        }
+
+        .btn-start {
+            background: linear-gradient(135deg, #007bff, #6610f2);
+            color: white;
+        }
+
+        .btn-stop {
+            background: linear-gradient(135deg, #dc3545, #e83e8c);
+            color: white;
+        }
+
+        .btn-clear {
+            background: linear-gradient(135deg, #6c757d, #495057);
+            color: white;
+        }
+
+        .btn-connect:hover, .btn-start:hover, .btn-stop:hover, .btn-clear:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+
+        .btn-connect:disabled, .btn-start:disabled, .btn-stop:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .recording-indicator {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 20px;
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 10px;
+            margin: 0 30px;
+        }
+
+        .recording-dot {
+            width: 12px;
+            height: 12px;
+            background: #dc3545;
+            border-radius: 50%;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .audio-level {
+            margin: 20px 30px;
+            height: 10px;
+            background: #e9ecef;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+
+        .audio-level-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745, #ffc107, #dc3545);
+            width: 0%;
+            transition: width 0.1s;
+        }
+
+        .status-panel {
+            padding: 20px 30px;
+            text-align: center;
+        }
+
+        .status {
+            padding: 12px 24px;
+            border-radius: 20px;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status.recording {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .results-panel {
+            padding: 30px;
+        }
+
+        .results-panel h3 {
+            margin-bottom: 20px;
+            color: #495057;
+        }
+
+        #resultsContainer {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            padding: 20px;
+            background: #f8f9fa;
+        }
+
+        .result-section {
+            margin-bottom: 15px;
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .result-label {
+            font-weight: 600;
+            color: #6c757d;
+            font-size: 14px;
+        }
+
+        .result-text {
+            margin-top: 8px;
+            font-size: 16px;
+            line-height: 1.5;
+            color: #212529;
+        }
+
+        .partial-result {
+            border-left: 4px solid #ffc107;
+        }
+
+        .final-result {
+            border-left: 4px solid #28a745;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 FunASR 实时语音识别</h1>
+        
+        <div class="control-panel">
+            <div class="input-group">
+                <label for="websocketUrl">WebSocket服务器地址:</label>
+                <input type="text" id="websocketUrl" value="ws://127.0.0.1:10095/" placeholder="ws://127.0.0.1:10095/">
+            </div>
+            
+            <div class="input-group">
+                <label for="asrMode">识别模式:</label>
+                <select id="asrMode">
+                    <option value="2pass">2pass (推荐)</option>
+                    <option value="online">online (实时)</option>
+                    <option value="offline">offline (离线)</option>
+                </select>
+            </div>
+            
+            <div class="input-group">
+                <label for="itnMode">逆文本标准化(ITN):</label>
+                <select id="itnMode">
+                    <option value="false">否</option>
+                    <option value="true">是</option>
+                </select>
+            </div>
+            
+            <div class="input-group">
+                <label for="hotwords">热词设置 (一行一个，格式: 词语 权重):</label>
+                <textarea id="hotwords" rows="3" placeholder="阿里巴巴 20&#10;hello world 40" style="width: 100%; padding: 10px; border: 2px solid #ddd; border-radius: 5px;">阿里巴巴 20
+hello world 40</textarea>
+            </div>
+        </div>
+        
+        <div class="button-group">
+            <button id="btnConnect" class="btn-connect">连接服务器</button>
+            <button id="btnStart" class="btn-start" disabled>开始录音</button>
+            <button id="btnStop" class="btn-stop" disabled>停止录音</button>
+            <button id="btnClear" class="btn-clear">清空结果</button>
+        </div>
+        
+        <div class="recording-indicator" id="recordingIndicator">
+            <div class="recording-dot"></div>
+            <span>正在录音中...</span>
+        </div>
+        
+        <div class="audio-level">
+            <div class="audio-level-bar" id="audioLevelBar"></div>
+        </div>
+        
+        <div class="status-panel">
+            <div class="status" id="statusText">请点击"连接服务器"开始</div>
+        </div>
+        
+        <div class="results-panel">
+            <h3>识别结果:</h3>
+            <div id="resultsContainer">
+                <div class="result-section">
+                    <span class="result-label">等待开始录音...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 录音库 -->
+    <script src="recorder-core.js"></script>
+    <script src="pcm.js"></script>
+
+    <script>
+        // 全局变量
+        let websocket = null;
+        let recorder = null;
+        let isConnected = false;
+        let isRecording = false;
+        let partialResult = '';
+        let finalResults = [];
+
+        // DOM元素
+        const btnConnect = document.getElementById('btnConnect');
+        const btnStart = document.getElementById('btnStart');
+        const btnStop = document.getElementById('btnStop');
+        const btnClear = document.getElementById('btnClear');
+        const statusText = document.getElementById('statusText');
+        const resultsContainer = document.getElementById('resultsContainer');
+        const recordingIndicator = document.getElementById('recordingIndicator');
+        const audioLevelBar = document.getElementById('audioLevelBar');
+        const websocketUrl = document.getElementById('websocketUrl');
+
+        // 初始化录音器
+        function initRecorder() {
+            recorder = Recorder({
+                type: "pcm",
+                bitRate: 16,
+                sampleRate: 16000,
+                onProcess: function(buffer, powerLevel, bufferDuration, bufferSampleRate, newBufferIdx, asyncEnd) {
+                    // 更新音频电平显示
+                    const level = Math.min(powerLevel * 100, 100);
+                    audioLevelBar.style.width = level + '%';
+                    
+                    // 发送音频数据到WebSocket
+                    if (websocket && websocket.readyState === WebSocket.OPEN && buffer.length > 0) {
+                        const pcmData = new Int16Array(buffer.length);
+                        for (let i = 0; i < buffer.length; i++) {
+                            pcmData[i] = Math.max(-32768, Math.min(32767, buffer[i] * 32768));
+                        }
+                        console.log('发送音频数据:', pcmData.length, '样本');
+                        websocket.send(pcmData.buffer);
+                    }
+                }
+            });
+        }
+
+        // 连接WebSocket
+        function connectWebSocket() {
+            const url = websocketUrl.value.trim();
+            if (!url) {
+                updateStatus('请输入WebSocket服务器地址', 'error');
+                return;
+            }
+
+            updateStatus('正在连接服务器...', 'info');
+            
+            try {
+                websocket = new WebSocket(url, ["binary"]);
+                
+                websocket.onopen = function(event) {
+                    console.log('WebSocket连接成功');
+                    isConnected = true;
+                    updateStatus('连接成功，可以开始录音', 'success');
+                    
+                    // 发送初始化配置
+                    const config = {
+                        "chunk_size": [5, 10, 5],
+                        "wav_name": "realtime",
+                        "is_speaking": true,
+                        "chunk_interval": 10,
+                        "itn": document.getElementById('itnMode').value === 'true',
+                        "mode": document.getElementById('asrMode').value,
+                        "wav_format": "PCM",
+                        "audio_fs": 16000
+                    };
+                    
+                    // 添加热词
+                    const hotwords = getHotwords();
+                    if (hotwords && hotwords.length > 0) {
+                        config.hotwords = hotwords;
+                    }
+                    
+                    console.log('发送配置:', config);
+                    websocket.send(JSON.stringify(config));
+                    
+                    // 更新按钮状态
+                    btnConnect.textContent = '断开连接';
+                    btnConnect.className = 'btn-stop';
+                    btnStart.disabled = false;
+                };
+                
+                websocket.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        console.log('收到WebSocket消息:', data);
+                        handleWebSocketMessage(data);
+                    } catch (e) {
+                        console.error('解析WebSocket消息失败:', e, '原始数据:', event.data);
+                    }
+                };
+                
+                websocket.onclose = function(event) {
+                    console.log('WebSocket连接关闭');
+                    isConnected = false;
+                    isRecording = false;
+                    updateStatus('连接已断开', 'error');
+                    updateButtonStates();
+                    hideRecordingIndicator();
+                };
+                
+                websocket.onerror = function(error) {
+                    console.error('WebSocket错误:', error);
+                    updateStatus('连接错误', 'error');
+                    isConnected = false;
+                    updateButtonStates();
+                };
+                
+            } catch (error) {
+                console.error('创建WebSocket连接失败:', error);
+                updateStatus('连接失败: ' + error.message, 'error');
+            }
+        }
+
+        // 断开WebSocket连接
+        function disconnectWebSocket() {
+            if (websocket) {
+                websocket.close();
+                websocket = null;
+            }
+            isConnected = false;
+            isRecording = false;
+            updateStatus('已断开连接', 'info');
+            updateButtonStates();
+            hideRecordingIndicator();
+        }
+
+        // 处理WebSocket消息
+        function handleWebSocketMessage(data) {
+            console.log('处理消息:', data);
+            
+            // 🎯 修正逻辑：is_final的含义
+            // is_final: false = 中间结果（实时流式）
+            // is_final: true = 最终结果
+            const isOnlineMode = data.mode && (data.mode.includes('online') || data.mode === 'online');
+            const isOfflineMode = data.mode && (data.mode.includes('offline') || data.mode === 'offline');
+            const isFinal = data.is_final === true; // is_final为true表示最终结果
+            const isPartial = data.is_final === false; // is_final为false表示中间结果
+            
+            console.log('消息分析:', { isOnlineMode, isOfflineMode, isFinal, isPartial, mode: data.mode, is_final: data.is_final });
+            
+            if (isPartial && data.text && data.text.trim()) {
+                // 中间结果（实时流式结果）
+                partialResult = data.text;
+                console.log('🔄 更新实时结果:', partialResult);
+                updatePartialResult(partialResult);
+            } else if (isFinal && data.text && data.text.trim()) {
+                // 最终结果
+                const finalText = data.text;
+                console.log('✅ 添加最终结果:', finalText);
+                addFinalResult(finalText, data.timestamp);
+                partialResult = '';
+                updatePartialResult('');
+            } else if (data.text && data.text.trim()) {
+                // 兜底处理：如果有文本内容但不匹配上述条件
+                console.log('🔧 兜底处理，文本:', data.text);
+                if (isOnlineMode) {
+                    partialResult = data.text;
+                    updatePartialResult(partialResult);
+                } else {
+                    addFinalResult(data.text, data.timestamp);
+                }
+            }
+        }
+
+        // 开始录音
+        function startRecording() {
+            if (!isConnected) {
+                updateStatus('请先连接服务器', 'error');
+                return;
+            }
+
+            recorder.open(function() {
+                recorder.start();
+                isRecording = true;
+                updateStatus('正在录音...', 'recording');
+                showRecordingIndicator();
+                updateButtonStates();
+                
+                // 发送开始录音信号
+                if (websocket && websocket.readyState === WebSocket.OPEN) {
+                    const startSignal = {"is_speaking": true};
+                    console.log('发送开始录音信号:', startSignal);
+                    websocket.send(JSON.stringify(startSignal));
+                }
+            }, function(msg, isUserNotAllow) {
+                console.error('录音器打开失败:', msg);
+                updateStatus('录音器打开失败: ' + msg, 'error');
+                if (isUserNotAllow) {
+                    updateStatus('需要麦克风权限，请允许访问麦克风', 'error');
+                }
+            });
+        }
+
+        // 停止录音
+        function stopRecording() {
+            if (recorder && isRecording) {
+                recorder.stop();
+                isRecording = false;
+                updateStatus('录音已停止', 'success');
+                hideRecordingIndicator();
+                updateButtonStates();
+                
+                // 发送停止录音信号
+                if (websocket && websocket.readyState === WebSocket.OPEN) {
+                    const stopSignal = {"is_speaking": false};
+                    console.log('发送停止录音信号:', stopSignal);
+                    websocket.send(JSON.stringify(stopSignal));
+                }
+            }
+        }
+
+        // 获取热词配置
+        function getHotwords() {
+            const hotwordsText = document.getElementById('hotwords').value.trim();
+            if (!hotwordsText) return null;
+            
+            const lines = hotwordsText.split('\n');
+            const hotwords = [];
+            
+            for (const line of lines) {
+                const parts = line.trim().split(/\s+/);
+                if (parts.length >= 2) {
+                    const word = parts[0];
+                    const weight = parseInt(parts[1]) || 20;
+                    hotwords.push([word, weight]);
+                }
+            }
+            
+            return hotwords.length > 0 ? hotwords : null;
+        }
+
+        // 更新状态显示
+        function updateStatus(message, type = 'info') {
+            statusText.textContent = message;
+            statusText.className = 'status ' + type;
+        }
+
+        // 更新按钮状态
+        function updateButtonStates() {
+            if (isConnected) {
+                btnConnect.textContent = '断开连接';
+                btnConnect.className = 'btn-stop';
+                btnStart.disabled = isRecording;
+                btnStop.disabled = !isRecording;
+            } else {
+                btnConnect.textContent = '连接服务器';
+                btnConnect.className = 'btn-connect';
+                btnStart.disabled = true;
+                btnStop.disabled = true;
+            }
+        }
+
+        // 显示录音指示器
+        function showRecordingIndicator() {
+            recordingIndicator.style.display = 'flex';
+        }
+
+        // 隐藏录音指示器
+        function hideRecordingIndicator() {
+            recordingIndicator.style.display = 'none';
+            audioLevelBar.style.width = '0%';
+        }
+
+        // 更新部分结果
+        function updatePartialResult(text) {
+            const container = resultsContainer;
+            let partialDiv = container.querySelector('.partial-result');
+            
+            if (!partialDiv) {
+                partialDiv = document.createElement('div');
+                partialDiv.className = 'result-section partial-result';
+                container.appendChild(partialDiv);
+            }
+            
+            if (text.trim()) {
+                partialDiv.innerHTML = `
+                    <span class="result-label">实时识别 (部分结果):</span>
+                    <div class="result-text">${text}</div>
+                `;
+            } else {
+                partialDiv.innerHTML = `
+                    <span class="result-label">等待语音输入...</span>
+                `;
+            }
+        }
+
+        // 添加最终结果
+        function addFinalResult(text, timestamp) {
+            const container = resultsContainer;
+            
+            // 移除部分结果显示
+            const partialDiv = container.querySelector('.partial-result');
+            if (partialDiv) {
+                partialDiv.remove();
+            }
+            
+            // 添加最终结果
+            const finalDiv = document.createElement('div');
+            finalDiv.className = 'result-section final-result';
+            
+            const timeStr = timestamp ? ` (${new Date().toLocaleTimeString()})` : '';
+            finalDiv.innerHTML = `
+                <span class="result-label">识别结果${timeStr}:</span>
+                <div class="result-text">${text}</div>
+            `;
+            
+            container.appendChild(finalDiv);
+            
+            // 滚动到底部
+            finalDiv.scrollIntoView({ behavior: 'smooth' });
+            
+            // 重新添加部分结果容器
+            updatePartialResult('');
+        }
+
+        // 清空结果
+        function clearResults() {
+            resultsContainer.innerHTML = `
+                <div class="result-section">
+                    <span class="result-label">等待开始录音...</span>
+                </div>
+            `;
+            finalResults = [];
+            partialResult = '';
+        }
+
+        // 事件监听器
+        btnConnect.addEventListener('click', function() {
+            if (isConnected) {
+                disconnectWebSocket();
+            } else {
+                connectWebSocket();
+            }
+        });
+
+        btnStart.addEventListener('click', startRecording);
+        btnStop.addEventListener('click', stopRecording);
+        btnClear.addEventListener('click', clearResults);
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            initRecorder();
+            updateButtonStates();
+        });
+
+        // 页面关闭前清理
+        window.addEventListener('beforeunload', function() {
+            if (isRecording) {
+                stopRecording();
+            }
+            if (isConnected) {
+                disconnectWebSocket();
+            }
+        });
+    </script>
+</body>
+</html> 

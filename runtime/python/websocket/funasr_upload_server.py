@@ -972,6 +972,15 @@ async def status_handler(request):
         else:
             return web.json_response({"error": "任务不存在"}, status=404)
 
+async def realtime_handler(request):
+    """实时录音页面处理器"""
+    try:
+        with open('realtime_demo.html', 'r', encoding='utf-8') as f:
+            content = f.read()
+        return web.Response(text=content, content_type='text/html')
+    except FileNotFoundError:
+        return web.Response(text="实时录音页面未找到", status=404)
+
 # HTTP文件上传处理
 async def upload_handler(request):
     """处理文件上传"""
@@ -1023,7 +1032,7 @@ async def upload_handler(request):
         return web.json_response({"error": str(e)}, status=500)
 
 # WebSocket处理
-async def websocket_handler(websocket, path):
+async def websocket_handler(websocket):
     """WebSocket连接处理"""
     task_id = None
     try:
@@ -1078,6 +1087,13 @@ async def create_http_app():
     # 添加路由
     app.router.add_post('/upload', upload_handler)
     app.router.add_get('/status/{task_id}', status_handler)
+    
+    # 添加实时录音页面路由
+    app.router.add_get('/realtime', realtime_handler)
+    
+    # 添加静态文件路由
+    app.router.add_get('/recorder-core.js', lambda request: web.FileResponse('recorder-core.js'))
+    app.router.add_get('/pcm.js', lambda request: web.FileResponse('pcm.js'))
     
     # 添加静态文件服务（可选）
     app.router.add_get('/', lambda request: web.Response(text="""
