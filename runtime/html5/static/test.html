@@ -21,7 +21,7 @@
                 ws.close();
             }
             
-            ws = new WebSocket('wss://127.0.0.1:10095', ['binary']);
+            		ws = new WebSocket('wss://gpu-pod6859164ddd21426e6e55774b-10095.node.inscode.run', ['binary']);
             
             ws.onopen = function() {
                 addMessage('✅ WebSocket 连接已打开');
