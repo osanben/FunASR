@@ -1,0 +1,13 @@
+aiohttp==3.8.6
+aiohttp-cors==0.7.0
+websockets==11.0.3
+librosa==0.10.1
+soundfile==0.12.1
+torch>=2.0.0
+torchaudio>=2.0.0
+funasr>=1.0.25
+numpy>=1.21.0
+scipy>=1.7.0
+opencc-python-reimplemented>=1.1.0
+pathlib2>=2.3.0
+uuid>=1.30 
