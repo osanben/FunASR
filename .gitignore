@@ -28,3 +28,26 @@ modelscope_models
 examples/aishell/llm_asr_nar/*
 *egg-info
 env/
+
+# 音频文件
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.flac
+*.ogg
+*.wma
+*.amr
+*.3gp
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.wmv
+*.webm
+
+# 音频相关目录
+audio_segments/
+uploads/
+speaker_database/
+*/*/*/*/*.wav
