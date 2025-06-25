@@ -102,6 +102,26 @@ class FunASRDatabase:
                 )
             ''')
             
+            # 性能报告表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS performance_reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL,
+                    machine_name TEXT,
+                    audio_duration REAL,
+                    transcription_time REAL,
+                    speaker_separation_time REAL,
+                    speaker_matching_time REAL,
+                    total_processing_time REAL,
+                    cpu_usage REAL,
+                    memory_usage REAL,
+                    model_type TEXT,
+                    device_type TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (task_id) REFERENCES transcription_history (task_id)
+                )
+            ''')
+            
             conn.commit()
     
     def add_transcription_task(self, task_id, filename, file_size=None, model_type=None):
@@ -344,6 +364,89 @@ class FunASRDatabase:
                 'today_transcriptions': today_transcriptions
             }
     
+    def add_performance_report(self, task_id, machine_name, audio_duration, 
+                             transcription_time, speaker_separation_time, 
+                             speaker_matching_time, total_processing_time,
+                             cpu_usage=None, memory_usage=None, model_type=None, device_type=None):
+        """添加性能报告"""
+        with self.lock:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO performance_reports 
+                    (task_id, machine_name, audio_duration, transcription_time, 
+                     speaker_separation_time, speaker_matching_time, total_processing_time,
+                     cpu_usage, memory_usage, model_type, device_type, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    task_id, machine_name, audio_duration, transcription_time,
+                    speaker_separation_time, speaker_matching_time, total_processing_time,
+                    cpu_usage, memory_usage, model_type, device_type, datetime.now()
+                ))
+                conn.commit()
+    
+    def get_performance_reports(self, limit=100, offset=0):
+        """获取性能报告"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT pr.*, th.filename 
+                FROM performance_reports pr
+                LEFT JOIN transcription_history th ON pr.task_id = th.task_id
+                ORDER BY pr.created_at DESC 
+                LIMIT ? OFFSET ?
+            ''', (limit, offset))
+            
+            columns = [desc[0] for desc in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    
+    def get_performance_statistics(self):
+        """获取性能统计信息"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            # 平均处理倍率
+            cursor.execute('''
+                SELECT AVG(total_processing_time / audio_duration) as avg_ratio
+                FROM performance_reports 
+                WHERE audio_duration > 0
+            ''')
+            avg_ratio = cursor.fetchone()[0] or 0
+            
+            # 最快处理倍率
+            cursor.execute('''
+                SELECT MIN(total_processing_time / audio_duration) as min_ratio
+                FROM performance_reports 
+                WHERE audio_duration > 0
+            ''')
+            min_ratio = cursor.fetchone()[0] or 0
+            
+            # 总处理时长
+            cursor.execute('SELECT SUM(total_processing_time) FROM performance_reports')
+            total_processing_time = cursor.fetchone()[0] or 0
+            
+            # 总音频时长
+            cursor.execute('SELECT SUM(audio_duration) FROM performance_reports')
+            total_audio_duration = cursor.fetchone()[0] or 0
+            
+            # 今日处理统计
+            cursor.execute('''
+                SELECT COUNT(*), SUM(audio_duration), SUM(total_processing_time)
+                FROM performance_reports 
+                WHERE DATE(created_at) = DATE('now')
+            ''')
+            today_stats = cursor.fetchone()
+            
+            return {
+                'avg_processing_ratio': avg_ratio,
+                'min_processing_ratio': min_ratio,
+                'total_processing_time': total_processing_time,
+                'total_audio_duration': total_audio_duration,
+                'today_tasks': today_stats[0] or 0,
+                'today_audio_duration': today_stats[1] or 0,
+                'today_processing_time': today_stats[2] or 0
+            }
+
     def cleanup_old_data(self, days=30):
         """清理旧数据"""
         with self.lock:
@@ -355,6 +458,10 @@ class FunASRDatabase:
                 '''.format(days))
                 cursor.execute('''
                     DELETE FROM audio_segments 
+                    WHERE created_at < datetime('now', '-{} days')
+                '''.format(days))
+                cursor.execute('''
+                    DELETE FROM performance_reports 
                     WHERE created_at < datetime('now', '-{} days')
                 '''.format(days))
                 conn.commit() 

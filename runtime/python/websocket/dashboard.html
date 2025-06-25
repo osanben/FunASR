@@ -30,7 +30,7 @@
                         <span class="mr-3">📁</span>
                         音频上传
                     </a>
-                    <a href="#" onclick="setActiveTab('batch')" 
+                    <a href="/batch_processing" 
                        class="sidebar-item flex items-center px-3 py-2 rounded-lg mb-1 transition-colors">
                         <span class="mr-3">📦</span>
                         批量处理
@@ -44,6 +44,11 @@
                        class="sidebar-item flex items-center px-3 py-2 rounded-lg mb-1 transition-colors">
                         <span class="mr-3">📝</span>
                         转录历史
+                    </a>
+                    <a href="/performance_report" 
+                       class="sidebar-item flex items-center px-3 py-2 rounded-lg mb-1 transition-colors">
+                        <span class="mr-3">📊</span>
+                        性能报告
                     </a>
                 </div>
             </nav>
@@ -169,13 +174,7 @@
                     </div>
                 </div>
 
-                <!-- 批量处理页面 -->
-                <div id="batch-content" class="space-y-6" style="display: none;">
-                    <div class="bg-white rounded-lg shadow p-6">
-                        <h3 class="text-lg font-semibold mb-4">批量文件上传</h3>
-                        <p class="text-gray-600 mb-4">此功能正在开发中，敬请期待...</p>
-                    </div>
-                </div>
+
 
                 <!-- 说话人管理页面 -->
                 <div id="speakers-content" class="space-y-6" style="display: none;">
@@ -249,11 +248,24 @@
         let activeTab = 'dashboard';
 
         function setActiveTab(tab) {
+            // 更新URL锚点（不触发页面跳转）
+            if (window.location.hash.substring(1) !== tab) {
+                window.history.pushState(null, null, '#' + tab);
+            }
+            
             // 更新侧边栏样式
             document.querySelectorAll('.sidebar-item').forEach(item => {
                 item.classList.remove('active');
             });
-            event.target.closest('.sidebar-item').classList.add('active');
+            if (event && event.target) {
+                event.target.closest('.sidebar-item').classList.add('active');
+            } else {
+                // 如果没有event（比如通过URL锚点访问），手动找到对应的导航项
+                const navItem = document.querySelector(`[onclick="setActiveTab('${tab}')"]`);
+                if (navItem) {
+                    navItem.classList.add('active');
+                }
+            }
 
             // 隐藏所有内容
             document.querySelectorAll('[id$="-content"]').forEach(content => {
@@ -610,8 +622,24 @@
 
         // 初始化
         document.addEventListener('DOMContentLoaded', function() {
-            setActiveTab('dashboard');
+            // 检查URL锚点，如果有则跳转到对应页面
+            const hash = window.location.hash.substring(1);
+            if (hash && ['dashboard', 'upload', 'speakers', 'history'].includes(hash)) {
+                setActiveTab(hash);
+            } else {
+                setActiveTab('dashboard');
+            }
             refreshData();
+        });
+
+        // 监听浏览器前进后退按钮
+        window.addEventListener('popstate', function(event) {
+            const hash = window.location.hash.substring(1);
+            if (hash && ['dashboard', 'upload', 'speakers', 'history'].includes(hash)) {
+                setActiveTab(hash);
+            } else {
+                setActiveTab('dashboard');
+            }
         });
     </script>
 </body>

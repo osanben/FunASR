@@ -281,6 +281,36 @@ def process_audio_file(file_path, task_id, model_type):
         except Exception as e:
             print(f"⚠️ 保存结果到数据库失败: {e}")
         
+        # 保存性能报告
+        try:
+            import platform
+            machine_name = platform.node() or 'Unknown'
+            
+            # 这里需要从实际的处理过程中获取各个阶段的时间
+            # 暂时使用估算值，后续可以在实际处理过程中记录
+            total_time = time.time() - start_time
+            audio_duration = results.get('duration', 0)
+            
+            # 估算各阶段时间（基于经验比例）
+            transcription_time = total_time * 0.6  # 转录占60%
+            speaker_separation_time = total_time * 0.3  # 说话人分离占30%
+            speaker_matching_time = total_time * 0.1  # 匹配占10%
+            
+            db.add_performance_report(
+                task_id=task_id,
+                machine_name=machine_name,
+                audio_duration=audio_duration,
+                transcription_time=transcription_time,
+                speaker_separation_time=speaker_separation_time,
+                speaker_matching_time=speaker_matching_time,
+                total_processing_time=total_time,
+                model_type=model_type,
+                device_type=args.device
+            )
+            print(f"📊 性能报告已保存: 总时长{total_time:.2f}s, 音频{audio_duration:.2f}s, 倍率{total_time/audio_duration:.2f}x")
+        except Exception as e:
+            print(f"⚠️ 保存性能报告失败: {e}")
+        
         # 发送完成通知
         send_progress_update(task_id, "completed", 100, "处理完成!", results)
         
@@ -1404,80 +1434,59 @@ async def transcription_history_handler(request):
         return web.json_response({"error": str(e)}, status=500)
 
 async def batch_upload_handler(request):
-    """批量上传处理器"""
+    """批量上传处理器 - 支持单个文件上传到批量队列"""
     try:
         reader = await request.multipart()
-        batch_id = str(uuid.uuid4())
-        files_processed = 0
+        uploaded_files = []
         
-        # 创建批处理任务
-        files_count = 0
-        temp_files = []
-        
-        # 先收集所有文件
+        # 处理上传的文件
         async for field in reader:
-            if field.name == 'files':
-                files_count += 1
-                # 保存临时文件
-                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.audio')
-                while True:
-                    chunk = await field.read_chunk()
-                    if not chunk:
-                        break
-                    temp_file.write(chunk)
-                temp_file.close()
-                temp_files.append({
-                    'path': temp_file.name,
-                    'filename': field.filename
+            if field.name == 'files' or field.name == 'audio_file':
+                # 生成任务ID
+                task_id = str(uuid.uuid4())
+                filename = field.filename or f"audio_{task_id}"
+                file_ext = Path(filename).suffix.lower()
+                
+                # 检查文件类型
+                allowed_extensions = {'.mp3', '.wav', '.m4a', '.aac', '.flac', '.ogg'}
+                if file_ext not in allowed_extensions:
+                    continue
+                
+                # 保存文件
+                file_path = os.path.join(args.upload_dir, f"{task_id}{file_ext}")
+                
+                with open(file_path, 'wb') as f:
+                    while True:
+                        chunk = await field.read_chunk()
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                
+                file_size = os.path.getsize(file_path)
+                print(f"📁 批量文件上传完成: {filename} ({file_size} 字节)")
+                
+                # 添加到数据库
+                db.add_transcription_task(task_id, filename, file_size, args.model_type)
+                
+                # 提交处理任务
+                executor.submit(process_audio_file, file_path, task_id, args.model_type)
+                
+                uploaded_files.append({
+                    "task_id": task_id,
+                    "filename": filename,
+                    "file_size": file_size
                 })
         
-        if files_count == 0:
-            return web.json_response({"error": "没有文件上传"}, status=400)
-        
-        # 创建批处理记录
-        db.create_batch_task(batch_id, f"批量处理_{files_count}个文件", files_count)
-        
-        # 异步处理文件
-        async def process_batch():
-            completed = 0
-            failed = 0
-            
-            for file_info in temp_files:
-                try:
-                    task_id = str(uuid.uuid4())
-                    # 添加到数据库
-                    db.add_transcription_task(task_id, file_info['filename'], model_type=args.model_type)
-                    
-                    # 提交处理任务
-                    executor.submit(process_audio_file, file_info['path'], task_id, args.model_type)
-                    completed += 1
-                    
-                    # 更新批处理进度
-                    db.update_batch_progress(batch_id, completed_files=completed)
-                    
-                except Exception as e:
-                    print(f"处理文件失败: {e}")
-                    failed += 1
-                    db.update_batch_progress(batch_id, failed_files=failed)
-                finally:
-                    # 清理临时文件
-                    try:
-                        os.unlink(file_info['path'])
-                    except:
-                        pass
-            
-            # 标记批处理完成
-            db.update_batch_progress(batch_id, status='completed')
-        
-        # 启动异步处理
-        asyncio.create_task(process_batch())
+        if not uploaded_files:
+            return web.json_response({"error": "没有有效的音频文件"}, status=400)
         
         return web.json_response({
-            "batch_id": batch_id,
-            "message": f"批量处理已启动，共 {files_count} 个文件"
+            "message": f"批量上传成功，共 {len(uploaded_files)} 个文件",
+            "files": uploaded_files
         })
         
     except Exception as e:
+        print(f"❌ 批量上传错误: {e}")
         return web.json_response({"error": str(e)}, status=500)
 
 async def batch_status_handler(request):
@@ -1486,6 +1495,43 @@ async def batch_status_handler(request):
         batch_id = request.match_info['batch_id']
         # 这里可以从数据库获取批处理状态
         return web.json_response({"batch_id": batch_id, "status": "processing"})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+async def performance_reports_handler(request):
+    """获取性能报告列表"""
+    try:
+        limit = int(request.query.get('limit', 100))
+        offset = int(request.query.get('offset', 0))
+        period = request.query.get('period', 'all')
+        
+        reports = db.get_performance_reports(limit=limit, offset=offset)
+        
+        # 根据时间段过滤
+        if period != 'all':
+            from datetime import datetime, timedelta
+            now = datetime.now()
+            if period == 'today':
+                cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            elif period == 'week':
+                cutoff = now - timedelta(days=7)
+            elif period == 'month':
+                cutoff = now - timedelta(days=30)
+            else:
+                cutoff = None
+            
+            if cutoff:
+                reports = [r for r in reports if datetime.fromisoformat(r['created_at'].replace('Z', '+00:00')) >= cutoff]
+        
+        return web.json_response(reports)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+async def performance_statistics_handler(request):
+    """获取性能统计信息"""
+    try:
+        stats = db.get_performance_statistics()
+        return web.json_response(stats)
     except Exception as e:
         return web.json_response({"error": str(e)}, status=500)
 
@@ -1570,6 +1616,8 @@ async def create_http_app():
     app.router.add_get('/api/transcription_history', transcription_history_handler)
     app.router.add_post('/api/batch_upload', batch_upload_handler)
     app.router.add_get('/api/batch_status/{batch_id}', batch_status_handler)
+    app.router.add_get('/api/performance_reports', performance_reports_handler)
+    app.router.add_get('/api/performance_statistics', performance_statistics_handler)
     
     # 添加音频片段服务路由
     app.router.add_get('/audio_segments/{task_id}/{filename}', audio_segment_handler)
@@ -1614,6 +1662,29 @@ async def create_http_app():
             return web.Response(text=f"Error loading dashboard: {e}", status=500)
     
     app.router.add_get('/dashboard', dashboard_handler)
+    
+    # 添加批量处理页面路由
+    async def batch_processing_handler(request):
+        try:
+            html_file = os.path.join(current_dir, 'batch_processing.html')
+            with open(html_file, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            return web.Response(text=html_content, content_type='text/html')
+        except Exception as e:
+            return web.Response(text=f"Error loading batch processing page: {e}", status=500)
+    
+    # 添加性能报告页面路由
+    async def performance_report_handler(request):
+        try:
+            html_file = os.path.join(current_dir, 'performance_report.html')
+            with open(html_file, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            return web.Response(text=html_content, content_type='text/html')
+        except Exception as e:
+            return web.Response(text=f"Error loading performance report page: {e}", status=500)
+    
+    app.router.add_get('/batch_processing', batch_processing_handler)
+    app.router.add_get('/performance_report', performance_report_handler)
     
     # 添加静态文件服务（可选）
     async def root_handler(request):

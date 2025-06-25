@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>性能报告 - FunASR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .metric-card { transition: transform 0.2s; }
+        .metric-card:hover { transform: translateY(-2px); }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="min-h-screen bg-gray-100 flex">
+        <!-- 左侧导航栏 -->
+        <nav class="w-64 bg-white shadow-lg flex-shrink-0">
+            <div class="p-6">
+                <div class="flex items-center space-x-3 mb-8">
+                    <span class="text-2xl">🎤</span>
+                    <h1 class="text-xl font-bold text-gray-900">FunASR 控制台</h1>
+                </div>
+                
+                <div class="space-y-2">
+                    <a href="/dashboard" 
+                       class="sidebar-item flex items-center px-3 py-2 rounded-lg mb-1 transition-colors text-gray-700 hover:bg-blue-50 hover:text-blue-600">
+                        <span class="mr-3">📊</span>
+                        控制台
+                    </a>
+                    <a href="#" onclick="navigateToUpload()" 
+                       class="sidebar-item flex items-center px-3 py-2 rounded-lg mb-1 transition-colors text-gray-700 hover:bg-blue-50 hover:text-blue-600">
+                        <span class="mr-3">📁</span>
+                        音频上传
+                    </a>
+                    <a href="/batch_processing" 
+                       class="sidebar-item flex items-center px-3 py-2 rounded-lg mb-1 transition-colors text-gray-700 hover:bg-blue-50 hover:text-blue-600">
+                        <span class="mr-3">📦</span>
+                        批量处理
+                    </a>
+                    <a href="#" onclick="navigateToSpeakers()" 
+                       class="sidebar-item flex items-center px-3 py-2 rounded-lg mb-1 transition-colors text-gray-700 hover:bg-blue-50 hover:text-blue-600">
+                        <span class="mr-3">👥</span>
+                        说话人管理
+                    </a>
+                    <a href="#" onclick="navigateToHistory()" 
+                       class="sidebar-item flex items-center px-3 py-2 rounded-lg mb-1 transition-colors text-gray-700 hover:bg-blue-50 hover:text-blue-600">
+                        <span class="mr-3">📝</span>
+                        转录历史
+                    </a>
+                    <a href="/performance_report" 
+                       class="sidebar-item flex items-center px-3 py-2 rounded-lg mb-1 transition-colors bg-blue-50 text-blue-600 border-r-2 border-blue-600">
+                        <span class="mr-3">📊</span>
+                        性能报告
+                    </a>
+                </div>
+            </div>
+        </nav>
+
+        <!-- 主内容区域 -->
+        <div class="flex-1 flex flex-col">
+            <!-- 顶部导航 -->
+            <div class="bg-white shadow-sm border-b">
+                <div class="px-6 py-4">
+                    <div class="flex justify-between items-center">
+                        <h1 class="text-2xl font-bold text-gray-900">📊 性能报告</h1>
+                        <div class="flex items-center space-x-4">
+                            <div class="flex items-center space-x-2">
+                                <span class="w-2 h-2 bg-green-500 rounded-full"></span>
+                                <span class="text-sm text-gray-600">实时监控</span>
+                            </div>
+                            <button onclick="refreshData()" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600">
+                                🔄 刷新数据
+                            </button>
+                            <button onclick="exportReport()" class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600">
+                                📥 导出报告
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 主内容 -->
+            <div class="flex-1 p-6 overflow-y-auto">
+            <!-- 系统信息 -->
+            <div class="bg-white rounded-lg shadow p-6 mb-8">
+                <h2 class="text-lg font-semibold mb-4">🖥️ 系统信息</h2>
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div class="text-center">
+                        <div class="text-sm text-gray-600">机器名称</div>
+                        <div class="font-semibold" id="machineName">加载中...</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-sm text-gray-600">模型类型</div>
+                        <div class="font-semibold" id="modelType">加载中...</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-sm text-gray-600">设备类型</div>
+                        <div class="font-semibold" id="deviceType">加载中...</div>
+                    </div>
+                    <div class="text-center">
+                        <div class="text-sm text-gray-600">运行时间</div>
+                        <div class="font-semibold" id="uptime">加载中...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 性能指标概览 -->
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                <div class="metric-card bg-white rounded-lg shadow p-6">
+                    <div class="flex items-center">
+                        <div class="p-3 bg-blue-100 rounded-lg">
+                            <span class="text-2xl">⚡</span>
+                        </div>
+                        <div class="ml-4">
+                            <p class="text-sm text-gray-600">平均处理倍率</p>
+                            <p class="text-2xl font-bold text-blue-600" id="avgRatio">0x</p>
+                            <p class="text-xs text-gray-500">处理时间/音频时长</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="metric-card bg-white rounded-lg shadow p-6">
+                    <div class="flex items-center">
+                        <div class="p-3 bg-green-100 rounded-lg">
+                            <span class="text-2xl">🏆</span>
+                        </div>
+                        <div class="ml-4">
+                            <p class="text-sm text-gray-600">最快处理倍率</p>
+                            <p class="text-2xl font-bold text-green-600" id="bestRatio">0x</p>
+                            <p class="text-xs text-gray-500">历史最佳记录</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="metric-card bg-white rounded-lg shadow p-6">
+                    <div class="flex items-center">
+                        <div class="p-3 bg-purple-100 rounded-lg">
+                            <span class="text-2xl">🎵</span>
+                        </div>
+                        <div class="ml-4">
+                            <p class="text-sm text-gray-600">总音频时长</p>
+                            <p class="text-2xl font-bold text-purple-600" id="totalAudioTime">0h</p>
+                            <p class="text-xs text-gray-500">累计处理音频</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="metric-card bg-white rounded-lg shadow p-6">
+                    <div class="flex items-center">
+                        <div class="p-3 bg-yellow-100 rounded-lg">
+                            <span class="text-2xl">📅</span>
+                        </div>
+                        <div class="ml-4">
+                            <p class="text-sm text-gray-600">今日处理</p>
+                            <p class="text-2xl font-bold text-yellow-600" id="todayTasks">0</p>
+                            <p class="text-xs text-gray-500">个任务</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 性能图表 -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">处理时间分布</h3>
+                    <canvas id="processingTimeChart" width="400" height="200"></canvas>
+                </div>
+                <div class="bg-white rounded-lg shadow p-6">
+                    <h3 class="text-lg font-semibold mb-4">处理倍率趋势</h3>
+                    <canvas id="ratioTrendChart" width="400" height="200"></canvas>
+                </div>
+            </div>
+
+            <!-- 详细性能记录 -->
+            <div class="bg-white rounded-lg shadow">
+                <div class="p-6 border-b">
+                    <div class="flex justify-between items-center">
+                        <h3 class="text-lg font-semibold">详细性能记录</h3>
+                        <div class="flex space-x-2">
+                            <select id="filterPeriod" onchange="loadPerformanceData()" 
+                                    class="px-3 py-1 border border-gray-300 rounded-md text-sm">
+                                <option value="today">今天</option>
+                                <option value="week">本周</option>
+                                <option value="month">本月</option>
+                                <option value="all">全部</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    文件名
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    音频时长
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    转录时间
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    说话人分离
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    匹配时间
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    总时间
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    处理倍率
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    时间
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody id="performanceTableBody" class="bg-white divide-y divide-gray-200">
+                            <!-- 数据将在这里动态加载 -->
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- 加载状态 -->
+                <div id="loadingState" class="p-8 text-center text-gray-500">
+                    <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                    <p class="mt-2">加载性能数据...</p>
+                </div>
+                
+                <!-- 空状态 -->
+                <div id="emptyState" class="p-8 text-center text-gray-500" style="display: none;">
+                    <span class="text-4xl mb-4 block">📊</span>
+                    <p>暂无性能数据</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    </div>
+
+    <script>
+        let processingTimeChart = null;
+        let ratioTrendChart = null;
+        let performanceData = [];
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            initCharts();
+            loadSystemInfo();
+            loadPerformanceStats();
+            loadPerformanceData();
+            
+            // 每30秒自动刷新数据
+            setInterval(refreshData, 30000);
+        });
+
+        function initCharts() {
+            // 处理时间分布图
+            const ctx1 = document.getElementById('processingTimeChart').getContext('2d');
+            processingTimeChart = new Chart(ctx1, {
+                type: 'bar',
+                data: {
+                    labels: ['转录', '说话人分离', '匹配'],
+                    datasets: [{
+                        label: '平均时间 (秒)',
+                        data: [0, 0, 0],
+                        backgroundColor: [
+                            'rgba(59, 130, 246, 0.8)',
+                            'rgba(16, 185, 129, 0.8)',
+                            'rgba(245, 158, 11, 0.8)'
+                        ],
+                        borderColor: [
+                            'rgb(59, 130, 246)',
+                            'rgb(16, 185, 129)',
+                            'rgb(245, 158, 11)'
+                        ],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+
+            // 处理倍率趋势图
+            const ctx2 = document.getElementById('ratioTrendChart').getContext('2d');
+            ratioTrendChart = new Chart(ctx2, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '处理倍率',
+                        data: [],
+                        borderColor: 'rgb(59, 130, 246)',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: '倍率 (x)'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        async function loadSystemInfo() {
+            try {
+                // 这里可以添加获取系统信息的API调用
+                document.getElementById('machineName').textContent = navigator.platform || 'Unknown';
+                document.getElementById('modelType').textContent = 'Paraformer';
+                document.getElementById('deviceType').textContent = 'CPU';
+                
+                // 模拟运行时间
+                const startTime = Date.now() - Math.random() * 86400000; // 随机1天内的时间
+                updateUptime(startTime);
+            } catch (error) {
+                console.error('加载系统信息失败:', error);
+            }
+        }
+
+        function updateUptime(startTime) {
+            const updateTime = () => {
+                const uptime = Date.now() - startTime;
+                const hours = Math.floor(uptime / 3600000);
+                const minutes = Math.floor((uptime % 3600000) / 60000);
+                document.getElementById('uptime').textContent = `${hours}h ${minutes}m`;
+            };
+            updateTime();
+            setInterval(updateTime, 60000); // 每分钟更新
+        }
+
+        async function loadPerformanceStats() {
+            try {
+                const response = await fetch('/api/performance_statistics');
+                const stats = await response.json();
+                
+                document.getElementById('avgRatio').textContent = (stats.avg_processing_ratio || 0).toFixed(2) + 'x';
+                document.getElementById('bestRatio').textContent = (stats.min_processing_ratio || 0).toFixed(2) + 'x';
+                document.getElementById('totalAudioTime').textContent = formatDuration(stats.total_audio_duration || 0);
+                document.getElementById('todayTasks').textContent = stats.today_tasks || 0;
+                
+            } catch (error) {
+                console.error('加载性能统计失败:', error);
+            }
+        }
+
+        async function loadPerformanceData() {
+            const loadingState = document.getElementById('loadingState');
+            const emptyState = document.getElementById('emptyState');
+            const tableBody = document.getElementById('performanceTableBody');
+            
+            loadingState.style.display = 'block';
+            emptyState.style.display = 'none';
+            
+            try {
+                const period = document.getElementById('filterPeriod').value;
+                const response = await fetch(`/api/performance_reports?period=${period}`);
+                performanceData = await response.json();
+                
+                loadingState.style.display = 'none';
+                
+                if (performanceData.length === 0) {
+                    emptyState.style.display = 'block';
+                    tableBody.innerHTML = '';
+                } else {
+                    emptyState.style.display = 'none';
+                    renderPerformanceTable();
+                    updateCharts();
+                }
+                
+            } catch (error) {
+                console.error('加载性能数据失败:', error);
+                loadingState.style.display = 'none';
+                emptyState.style.display = 'block';
+            }
+        }
+
+        function renderPerformanceTable() {
+            const tableBody = document.getElementById('performanceTableBody');
+            
+            tableBody.innerHTML = performanceData.map(item => {
+                const ratio = item.audio_duration > 0 ? (item.total_processing_time / item.audio_duration) : 0;
+                return `
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                            ${item.filename || 'Unknown'}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            ${formatDuration(item.audio_duration)}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            ${formatDuration(item.transcription_time)}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            ${formatDuration(item.speaker_separation_time)}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            ${formatDuration(item.speaker_matching_time)}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            ${formatDuration(item.total_processing_time)}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                            <span class="px-2 py-1 text-xs rounded-full ${getRatioClass(ratio)}">
+                                ${ratio.toFixed(2)}x
+                            </span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            ${formatDate(item.created_at)}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function updateCharts() {
+            if (performanceData.length === 0) return;
+
+            // 更新处理时间分布图
+            const avgTranscription = performanceData.reduce((sum, item) => sum + (item.transcription_time || 0), 0) / performanceData.length;
+            const avgSeparation = performanceData.reduce((sum, item) => sum + (item.speaker_separation_time || 0), 0) / performanceData.length;
+            const avgMatching = performanceData.reduce((sum, item) => sum + (item.speaker_matching_time || 0), 0) / performanceData.length;
+
+            processingTimeChart.data.datasets[0].data = [avgTranscription, avgSeparation, avgMatching];
+            processingTimeChart.update();
+
+            // 更新处理倍率趋势图（最近20条记录）
+            const recentData = performanceData.slice(0, 20).reverse();
+            const labels = recentData.map((item, index) => `任务${index + 1}`);
+            const ratios = recentData.map(item => 
+                item.audio_duration > 0 ? item.total_processing_time / item.audio_duration : 0
+            );
+
+            ratioTrendChart.data.labels = labels;
+            ratioTrendChart.data.datasets[0].data = ratios;
+            ratioTrendChart.update();
+        }
+
+        function getRatioClass(ratio) {
+            if (ratio < 1) return 'bg-green-100 text-green-800';
+            if (ratio < 2) return 'bg-yellow-100 text-yellow-800';
+            if (ratio < 3) return 'bg-orange-100 text-orange-800';
+            return 'bg-red-100 text-red-800';
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds || seconds < 0) return '0s';
+            
+            const hours = Math.floor(seconds / 3600);
+            const minutes = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            
+            if (hours > 0) {
+                return `${hours}h ${minutes}m ${secs}s`;
+            } else if (minutes > 0) {
+                return `${minutes}m ${secs}s`;
+            } else {
+                return `${secs}s`;
+            }
+        }
+
+        function formatDate(dateString) {
+            return new Date(dateString).toLocaleString('zh-CN');
+        }
+
+        function refreshData() {
+            loadPerformanceStats();
+            loadPerformanceData();
+        }
+
+        function exportReport() {
+            if (performanceData.length === 0) {
+                alert('没有可导出的数据');
+                return;
+            }
+
+            const report = {
+                exportTime: new Date().toISOString(),
+                systemInfo: {
+                    machineName: document.getElementById('machineName').textContent,
+                    modelType: document.getElementById('modelType').textContent,
+                    deviceType: document.getElementById('deviceType').textContent
+                },
+                statistics: {
+                    avgRatio: document.getElementById('avgRatio').textContent,
+                    bestRatio: document.getElementById('bestRatio').textContent,
+                    totalAudioTime: document.getElementById('totalAudioTime').textContent,
+                    todayTasks: document.getElementById('todayTasks').textContent
+                },
+                detailData: performanceData
+            };
+
+            const dataStr = JSON.stringify(report, null, 2);
+            const dataBlob = new Blob([dataStr], {type: 'application/json'});
+            
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(dataBlob);
+            link.download = `performance_report_${new Date().toISOString().slice(0, 10)}.json`;
+            link.click();
+        }
+
+        // 导航函数 - 平滑跳转到控制台的不同功能
+        function navigateToUpload() {
+            window.location.href = '/dashboard#upload';
+        }
+
+        function navigateToSpeakers() {
+            window.location.href = '/dashboard#speakers';
+        }
+
+        function navigateToHistory() {
+            window.location.href = '/dashboard#history';
+        }
+    </script>
+</body>
+</html> 
