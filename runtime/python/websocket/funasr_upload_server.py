@@ -17,7 +17,8 @@ from aiohttp import web, web_request
 import aiohttp_cors
 import tempfile
 import shutil
-from speaker_manager_debug import SpeakerManager
+from speaker_manager import SpeakerManager
+from audio_segment_manager import AudioSegmentManager
 try:
     from opencc import OpenCC  # 繁简转换
     cc = OpenCC('t2s')  # 繁体转简体
@@ -47,6 +48,12 @@ executor = ThreadPoolExecutor(max_workers=4)
 
 # 说话人管理器
 speaker_manager = None
+
+# 音频片段管理器
+audio_segment_manager = None
+
+# 说话人识别模型缓存
+speaker_recognition_model = None
 
 # 解析命令行参数
 parser = argparse.ArgumentParser()
@@ -149,10 +156,35 @@ if args.model_type in ["paraformer", "sensevoice", "hybrid"]:
 
 print("🎉 所有模型加载完成!")
 
+# 初始化说话人识别模型（一次性加载）
+print("🎯 初始化说话人识别模型...")
+try:
+    from funasr import AutoModel
+    speaker_recognition_model = AutoModel(
+        model="iic/speech_campplus_sv_zh-cn_16k-common",
+        ngpu=0 if args.device == "mps" else args.ngpu,
+        ncpu=args.ncpu,
+        device="cpu" if args.device == "mps" else args.device,
+        disable_pbar=True,
+        disable_log=True,
+        disable_update=True,  # 🎯 禁用模型更新
+        # trust_remote_code=True,  # 移除这个参数避免警告
+        cache_dir=None,  # 使用默认缓存目录
+    )
+    print("✅ 说话人识别模型加载完成!")
+except Exception as e:
+    print(f"⚠️ 说话人识别模型加载失败: {e}")
+    speaker_recognition_model = None
+
 # 初始化说话人管理器
 print("🎯 初始化说话人管理器...")
 speaker_manager = SpeakerManager()
 print("✅ 说话人管理器初始化完成!")
+
+# 初始化音频片段管理器
+print("🎵 初始化音频片段管理器...")
+audio_segment_manager = AudioSegmentManager()
+print("✅ 音频片段管理器初始化完成!")
 
 def process_audio_file(file_path, task_id, model_type):
     """处理音频文件的主函数"""
@@ -200,12 +232,28 @@ def process_audio_file(file_path, task_id, model_type):
             results["funasr"] = funasr_result
             print(f"✅ FunASR处理完成，耗时: {end_time - start_time:.2f}秒")
         
+        # 保存音频片段
+        send_progress_update(task_id, "processing", 90, "保存音频片段...")
+        segment_files = {}
+        
+        # 从FunASR结果中提取片段进行保存
+        if "funasr" in results and results["funasr"].get("speaker_segments"):
+            try:
+                segments_to_save = results["funasr"]["speaker_segments"]
+                segment_files = audio_segment_manager.save_audio_segments(
+                    task_id, audio_data, segments_to_save, sample_rate
+                )
+                print(f"🎵 保存了 {len(segment_files)} 个音频片段")
+            except Exception as e:
+                print(f"⚠️ 保存音频片段失败: {e}")
+        
         # 更新最终结果
         with task_lock:
             task_results[task_id] = {
                 "status": "completed",
                 "progress": 100,
                 "results": results,
+                "segment_files": segment_files,
                 "file_info": {
                     "duration": len(audio_data) / 16000,
                     "sample_rate": sample_rate,
@@ -815,7 +863,7 @@ def funasr_transcribe(audio_data, sample_rate=16000):
         if audio_data.dtype != np.float32:
             audio_data = audio_data.astype(np.float32)
         
-        # FunASR识别 - 启用说话人识别
+        # FunASR识别 - 只做语音识别，不做说话人分离
         res = model_asr.generate(
             input=audio_data,
             cache={},
@@ -824,21 +872,14 @@ def funasr_transcribe(audio_data, sample_rate=16000):
             batch_size_s=60,
             merge_vad=True,
             merge_length_s=15,
-            return_spk_res=True,  # 🎯 启用说话人识别
-            return_spk_embedding=True,  # 返回说话人嵌入向量
-            spk_mode="punc_segment",  # 说话人分离模式
+            return_spk_res=False,  # 🎯 关闭说话人识别，直接使用专业模型
+            return_spk_embedding=False,  # 不返回说话人嵌入向量
+            # spk_mode="punc_segment",  # 不使用说话人分离模式
         )
         
         if res and len(res) > 0:
             result = res[0]
             text = result.get("text", "")
-            
-            # 🔍 调试: 打印FunASR返回的完整结果结构
-            print(f"🔍 FunASR结果键: {list(result.keys())}")
-            if "sentence_info" in result:
-                print(f"🔍 sentence_info长度: {len(result['sentence_info'])}")
-                for i, sentence in enumerate(result['sentence_info'][:3]):  # 只打印前3个
-                    print(f"🔍 句子{i}: {sentence}")
             
             # 处理时间戳
             timestamp_text = ""
@@ -848,38 +889,16 @@ def funasr_transcribe(audio_data, sample_rate=16000):
                     for i, (start, end) in enumerate(timestamps):
                         timestamp_text += f"[{start/1000:.2f}->{end/1000:.2f}] "
             
-            # 处理说话人信息
-            speaker_segments = []
-            if "sentence_info" in result:
-                sentence_info = result["sentence_info"]
-                for i, sentence in enumerate(sentence_info):
-                    speaker_id = sentence.get("spk", 0)  # 说话人ID
-                    start_time = sentence.get("start", 0) / 1000.0  # 转换为秒
-                    end_time = sentence.get("end", 0) / 1000.0
-                    sentence_text = sentence.get("text", "").strip()
-                    
-                    if sentence_text:
-                        # 繁体转简体
-                        if OPENCC_AVAILABLE:
-                            try:
-                                sentence_text = cc.convert(sentence_text)
-                            except Exception as e:
-                                print(f"⚠️ FunASR片段繁简转换失败: {e}")
-                        
-                        speaker_segments.append({
-                            "start": start_time,
-                            "end": end_time,
-                            "text": sentence_text,
-                            "speaker": f"说话人{speaker_id + 1}",  # 说话人从1开始编号
-                            "confidence": 1.0,  # FunASR说话人置信度
-                            "duration": end_time - start_time
-                        })
+            # 🎯 跳过FunASR的说话人分析，直接使用专业模型进行说话人分离
+            total_duration = len(audio_data) / sample_rate
+            print(f"🎯 音频总时长={total_duration:.1f}秒，跳过FunASR说话人分析，直接使用专业模型")
             
-            # 如果没有说话人信息，创建默认的单人结果
-            if not speaker_segments and "timestamp" in result and text:
+            # 创建基础的单人片段（用于专业模型分析）
+            speaker_segments = []
+            if "timestamp" in result and text:
                 timestamps = result["timestamp"]
                 if timestamps:
-                    # 基于时间戳创建说话人片段
+                    # 基于时间戳创建初始片段
                     words = text.split()
                     for i, (start, end) in enumerate(timestamps):
                         word_text = words[i] if i < len(words) else ""
@@ -894,39 +913,31 @@ def funasr_transcribe(audio_data, sample_rate=16000):
                             })
                 else:
                     # 没有时间戳，创建整体片段
-                    duration = len(audio_data) / sample_rate
                     speaker_segments.append({
                         "start": 0.0,
-                        "end": duration,
+                        "end": total_duration,
                         "text": text,
                         "speaker": "说话人1",
                         "confidence": 0.8,
-                        "duration": duration
+                        "duration": total_duration
                     })
             
-            # 统计说话人数量
-            unique_speakers = len(set(seg.get("speaker", "说话人1") for seg in speaker_segments))
-            total_duration = len(audio_data) / sample_rate
-            
-            print(f"🎯 FunASR说话人分析: 总时长={total_duration:.1f}秒, 检测到{unique_speakers}个说话人")
-            
-            # 🔧 如果FunASR只检测到1个说话人，但音频较长，使用pyannote.audio进行二次分析
-            if unique_speakers == 1 and total_duration > 5.0 and PYANNOTE_AVAILABLE:
-                print("🔄 FunASR只检测到1个说话人，启用pyannote.audio进行二次分析...")
+            # 🔧 直接使用专业模型进行说话人分离
+            if total_duration > 3.0 and PYANNOTE_AVAILABLE:
+                print("🚀 使用专业模型进行说话人分离...")
                 try:
-                    # 使用pyannote.audio重新分离说话人
+                    # 使用pyannote.audio进行说话人分离
                     enhanced_segments = detect_speakers_with_voice_print(audio_data, speaker_segments, sample_rate)
                     if enhanced_segments and len(enhanced_segments) > 0:
                         enhanced_speakers = len(set(seg.get("speaker", "说话人1") for seg in enhanced_segments))
-                        if enhanced_speakers > 1:
-                            print(f"✅ pyannote.audio检测到{enhanced_speakers}个说话人，使用增强结果")
-                            speaker_segments = enhanced_segments
-                            unique_speakers = enhanced_speakers
-                        else:
-                            print("⚠️ pyannote.audio也只检测到1个说话人")
+                        print(f"✅ 专业模型检测到{enhanced_speakers}个说话人")
+                        speaker_segments = enhanced_segments
+                    else:
+                        print("⚠️ 专业模型分析失败，使用默认单人模式")
                 except Exception as e:
-                    print(f"⚠️ pyannote.audio分析失败: {e}")
+                    print(f"⚠️ 专业模型分析失败: {e}")
             
+            unique_speakers = len(set(seg.get("speaker", "说话人1") for seg in speaker_segments))
             print(f"🎉 最终说话人分析结果: {unique_speakers}个说话人")
             
             # 🎯 说话人姓名匹配
@@ -946,9 +957,9 @@ def funasr_transcribe(audio_data, sample_rate=16000):
                     if end_sample > start_sample:
                         audio_segment = audio_data[start_sample:end_sample]
                         
-                        # 匹配说话人
+                        # 匹配说话人 - 传递专业模型
                         matched_name, similarity, match_info = speaker_manager.match_speaker(
-                            audio_segment, model_asr=model_asr
+                            audio_segment, model_asr=speaker_recognition_model
                         )
                         
                         # 更新说话人信息
@@ -1038,6 +1049,25 @@ async def status_handler(request):
     with task_lock:
         if task_id in task_results:
             result = task_results[task_id]
+            
+            # 添加音频片段URL信息
+            if result.get("status") == "completed" and "results" in result:
+                # 获取音频片段信息
+                segments_info = audio_segment_manager.list_task_segments(task_id)
+                
+                # 为每个说话人分离结果添加播放URL
+                for model_name, model_result in result["results"].items():
+                    if "speaker_segments" in model_result:
+                        for i, segment in enumerate(model_result["speaker_segments"]):
+                            segment_id = f"{task_id}_segment_{i+1}"
+                            
+                            # 查找对应的音频文件信息
+                            for seg_info in segments_info:
+                                if seg_info["segment_id"] == segment_id:
+                                    segment["audio_url"] = f"{HTTP_BASE_URL}/audio_segments/{seg_info['relative_path']}"
+                                    segment["file_size"] = seg_info["file_size"]
+                                    break
+            
             # 清理NaN值
             cleaned_result = clean_nan_values(result)
             return web.json_response(cleaned_result, dumps=lambda obj: json.dumps(obj, ensure_ascii=False, indent=2))
@@ -1149,7 +1179,7 @@ async def register_speaker_handler(request):
             # 注册说话人
             print(f"🎯 开始注册说话人: {speaker_name}, 文件: {temp_file.name}")
             success, message = speaker_manager.register_speaker(
-                speaker_name, temp_file.name, model_asr=model_asr
+                speaker_name, temp_file.name, model_asr=speaker_recognition_model or model_asr
             )
             print(f"📊 注册结果: success={success}, message={message}")
             
@@ -1198,6 +1228,99 @@ async def delete_speaker_handler(request):
         print(f"❌ 删除说话人错误: {e}")
         return web.json_response({"error": f"删除失败: {str(e)}"}, status=500)
 
+async def update_segment_speaker_handler(request):
+    """更新音频片段的说话人标签"""
+    try:
+        data = await request.json()
+        task_id = data.get("task_id")
+        segment_index = data.get("segment_index")
+        new_speaker_name = data.get("speaker_name", "").strip()
+        audio_url = data.get("audio_url")  # 用于自动注册新说话人
+        
+        if not task_id or segment_index is None or not new_speaker_name:
+            return web.json_response({"error": "缺少必要参数"}, status=400)
+        
+        # 更新任务结果中的说话人标签
+        with task_lock:
+            if task_id not in task_results:
+                return web.json_response({"error": "任务不存在"}, status=404)
+            
+            task_result = task_results[task_id]
+            
+            # 更新FunASR结果中的说话人标签
+            if "results" in task_result and "funasr" in task_result["results"]:
+                funasr_result = task_result["results"]["funasr"]
+                if "speaker_segments" in funasr_result and segment_index < len(funasr_result["speaker_segments"]):
+                    # 获取原始说话人名称
+                    old_speaker = funasr_result["speaker_segments"][segment_index].get("speaker", "")
+                    
+                    # 更新说话人标签
+                    funasr_result["speaker_segments"][segment_index]["speaker"] = new_speaker_name
+                    
+                    print(f"🔄 更新片段{segment_index}说话人: {old_speaker} -> {new_speaker_name}")
+                    
+                    # 如果是新的说话人名称，尝试自动注册
+                    if new_speaker_name not in [old_speaker] and audio_url:
+                        try:
+                            # 检查是否已经注册过这个说话人
+                            registered_speakers = speaker_manager.get_registered_speakers()
+                            speaker_exists = any(s["name"] == new_speaker_name for s in registered_speakers)
+                            
+                            if not speaker_exists:
+                                # 下载音频片段并注册新说话人
+                                success = await auto_register_speaker_from_segment(
+                                    new_speaker_name, audio_url, task_id, segment_index
+                                )
+                                if success:
+                                    print(f"✅ 自动注册新说话人: {new_speaker_name}")
+                                else:
+                                    print(f"⚠️ 自动注册说话人失败: {new_speaker_name}")
+                        except Exception as e:
+                            print(f"⚠️ 自动注册说话人出错: {e}")
+                    
+                    return web.json_response({
+                        "message": f"说话人标签已更新为: {new_speaker_name}",
+                        "updated_segment": funasr_result["speaker_segments"][segment_index]
+                    })
+                else:
+                    return web.json_response({"error": "片段索引无效"}, status=400)
+            else:
+                return web.json_response({"error": "未找到说话人分离结果"}, status=400)
+            
+    except Exception as e:
+        print(f"❌ 更新说话人标签错误: {e}")
+        return web.json_response({"error": f"更新失败: {str(e)}"}, status=500)
+
+async def auto_register_speaker_from_segment(speaker_name, audio_url, task_id, segment_index):
+    """从音频片段自动注册新说话人"""
+    try:
+        # 构建本地音频文件路径
+        import urllib.parse
+        parsed_url = urllib.parse.urlparse(audio_url)
+        relative_path = parsed_url.path.replace('/audio_segments/', '')
+        
+        audio_file_path = Path("./audio_segments") / relative_path
+        
+        if not audio_file_path.exists():
+            print(f"❌ 音频文件不存在: {audio_file_path}")
+            return False
+        
+        # 使用说话人管理器注册
+        success, message = speaker_manager.register_speaker(
+            speaker_name, str(audio_file_path), model_asr=speaker_recognition_model or model_asr
+        )
+        
+        if success:
+            print(f"🎉 从片段自动注册说话人成功: {speaker_name}")
+            return True
+        else:
+            print(f"❌ 自动注册说话人失败: {message}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ 自动注册说话人异常: {e}")
+        return False
+
 async def websocket_handler(websocket):
     """WebSocket连接处理"""
     task_id = None
@@ -1237,6 +1360,53 @@ async def websocket_handler(websocket):
             print(f"🗑️ 清理WebSocket连接: {task_id}")
 
 # 创建HTTP应用
+async def audio_segment_handler(request):
+    """音频片段文件服务"""
+    try:
+        # 获取文件路径参数
+        task_id = request.match_info.get('task_id')
+        filename = request.match_info.get('filename')
+        
+        print(f"🔍 音频片段请求: task_id={task_id}, filename={filename}")
+        
+        if not task_id or not filename:
+            print("❌ 缺少必要参数")
+            return web.Response(text="参数错误", status=400)
+        
+        # 构建文件路径
+        file_path = Path("./audio_segments") / task_id / filename
+        print(f"📁 音频文件路径: {file_path}")
+        print(f"📊 文件是否存在: {file_path.exists()}")
+        
+        if not file_path.exists():
+            print(f"❌ 文件不存在: {file_path}")
+            # 列出目录内容进行调试
+            task_dir = Path("./audio_segments") / task_id
+            if task_dir.exists():
+                files = list(task_dir.glob("*"))
+                print(f"📂 目录 {task_dir} 中的文件: {[f.name for f in files]}")
+            else:
+                print(f"❌ 任务目录不存在: {task_dir}")
+            return web.Response(text=f"文件不存在: {filename}", status=404)
+        
+        print(f"✅ 返回音频文件: {file_path}")
+        
+        # 返回音频文件
+        return web.FileResponse(
+            path=str(file_path),
+            headers={
+                'Content-Type': 'audio/wav',
+                'Cache-Control': 'public, max-age=3600',
+                'Access-Control-Allow-Origin': '*'
+            }
+        )
+        
+    except Exception as e:
+        print(f"❌ 音频片段服务错误: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.Response(text="服务器错误", status=500)
+
 async def create_http_app():
     app = web.Application()
     
@@ -1261,6 +1431,10 @@ async def create_http_app():
     app.router.add_post('/register_speaker', register_speaker_handler)
     app.router.add_get('/list_speakers', list_speakers_handler)
     app.router.add_post('/delete_speaker', delete_speaker_handler)
+    app.router.add_post('/update_segment_speaker', update_segment_speaker_handler)
+    
+    # 添加音频片段服务路由
+    app.router.add_get('/audio_segments/{task_id}/{filename}', audio_segment_handler)
     
     # 添加静态文件路由
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1309,6 +1483,46 @@ async def create_http_app():
     <div id="status"></div>
     <button id="getResultBtn" style="display:none; margin: 10px 0; padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">获取识别结果</button>
     <div id="results"></div>
+    
+    <!-- 说话人编辑模态框 -->
+    <div id="speakerModal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5);">
+        <div style="background-color: #fefefe; margin: 15% auto; padding: 20px; border-radius: 8px; width: 400px; max-width: 90%;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h3 style="margin: 0; color: #333;">编辑说话人</h3>
+                <button onclick="closeSpeakerModal()" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #999;">&times;</button>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">当前说话人:</label>
+                <span id="currentSpeakerName" style="color: #007bff; font-size: 16px;"></span>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <label for="speakerSelect" style="display: block; margin-bottom: 5px; font-weight: bold;">选择已注册的说话人:</label>
+                <select id="speakerSelect" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+                    <option value="">-- 选择说话人 --</option>
+                </select>
+            </div>
+            
+            <div style="margin-bottom: 20px;">
+                <label for="newSpeakerName" style="display: block; margin-bottom: 5px; font-weight: bold;">或输入新的说话人姓名:</label>
+                <input type="text" id="newSpeakerName" placeholder="输入新说话人姓名" 
+                       style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; box-sizing: border-box;">
+                <small style="color: #666; font-size: 12px;">输入新姓名将自动注册为新说话人</small>
+            </div>
+            
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button onclick="closeSpeakerModal()" 
+                        style="padding: 8px 16px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                    取消
+                </button>
+                <button onclick="saveSpeakerChange()" 
+                        style="padding: 8px 16px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                    保存
+                </button>
+            </div>
+        </div>
+    </div>
     
     <script>
         let ws = null;
@@ -1449,12 +1663,48 @@ async def create_http_app():
                                 <summary style="cursor: pointer; font-weight: bold;">👥 说话人分离结果</summary>
                                 <div style="background: #f8f9fa; padding: 10px; border-radius: 4px; margin: 5px 0;">`;
                             
-                            for (const segment of result.speaker_segments) {
+                            for (let i = 0; i < result.speaker_segments.length; i++) {
+                                const segment = result.speaker_segments[i];
                                 const speakerColor = segment.speaker === '说话人1' ? '#007bff' : '#28a745';
-                                html += `<div style="margin: 8px 0; padding: 8px; border-left: 4px solid ${speakerColor}; background: white;">
-                                    <strong style="color: ${speakerColor};">${segment.speaker}</strong> 
-                                    <span style="color: #666; font-size: 12px;">[${segment.start.toFixed(2)}s - ${segment.end.toFixed(2)}s]</span><br>
-                                    <span style="font-size: 14px; line-height: 1.4;">${segment.text}</span>
+                                const segmentId = `segment_${i}`;
+                                
+                                html += `<div style="margin: 8px 0; padding: 12px; border-left: 4px solid ${speakerColor}; background: white; border-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+                                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                        <div style="flex-grow: 1;">
+                                            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                                                <strong style="color: ${speakerColor};" id="speaker_name_${i}">${segment.speaker}</strong>
+                                                <button onclick="editSpeaker(${i}, '${segment.speaker}', '${segment.audio_url || ''}', currentTaskId)" 
+                                                        style="background: #17a2b8; color: white; border: none; padding: 2px 6px; border-radius: 3px; cursor: pointer; font-size: 10px;"
+                                                        title="编辑说话人">
+                                                    ✏️ 编辑
+                                                </button>
+                                            </div>
+                                            <div>
+                                                <span style="color: #666; font-size: 12px;">[${segment.start.toFixed(2)}s - ${segment.end.toFixed(2)}s]</span>
+                                                ${segment.duration ? `<span style="color: #999; font-size: 11px;">(${segment.duration.toFixed(2)}s)</span>` : ''}
+                                            </div>
+                                        </div>`;
+                                
+                                // 添加播放按钮（如果有音频URL）
+                                if (segment.audio_url) {
+                                    html += `<div>
+                                        <button onclick="playSegment('${segment.audio_url}', '${segmentId}')" 
+                                                style="background: #28a745; color: white; border: none; padding: 4px 8px; border-radius: 3px; cursor: pointer; font-size: 12px; margin-right: 5px;"
+                                                title="播放此片段">
+                                            🔊 播放
+                                        </button>
+                                        <span style="color: #999; font-size: 10px;">
+                                            ${segment.file_size ? `(${(segment.file_size/1024).toFixed(1)}KB)` : ''}
+                                        </span>
+                                    </div>`;
+                                }
+                                
+                                html += `</div>
+                                    <div style="font-size: 14px; line-height: 1.4; color: #333;">${segment.text}</div>
+                                    <audio id="audio_${segmentId}" style="width: 100%; margin-top: 8px; display: none;" controls preload="none">
+                                        ${segment.audio_url ? `<source src="${segment.audio_url}" type="audio/wav">` : ''}
+                                        您的浏览器不支持音频播放。
+                                    </audio>
                                 </div>`;
                             }
                             
@@ -1476,6 +1726,181 @@ async def create_http_app():
             }
             
             document.getElementById('results').innerHTML = html;
+        }
+        
+        // 播放音频片段函数
+        function playSegment(audioUrl, segmentId) {
+            const audioElement = document.getElementById(`audio_${segmentId}`);
+            
+            if (audioElement) {
+                // 显示音频控件
+                audioElement.style.display = 'block';
+                
+                // 如果还没有加载音频源，设置并加载
+                if (audioElement.src !== audioUrl) {
+                    audioElement.src = audioUrl;
+                    audioElement.load();
+                }
+                
+                // 播放音频
+                audioElement.play().catch(error => {
+                    console.error('播放音频失败:', error);
+                    alert('播放音频失败，请检查音频文件是否存在');
+                });
+            }
+        }
+        
+        // 全局变量存储当前编辑的信息
+        let currentEditInfo = {};
+        
+        // 编辑说话人函数
+        async function editSpeaker(segmentIndex, currentSpeaker, audioUrl, taskId) {
+            try {
+                // 保存当前编辑信息
+                currentEditInfo = {
+                    segmentIndex,
+                    currentSpeaker,
+                    audioUrl,
+                    taskId
+                };
+                
+                // 获取已注册的说话人列表
+                const response = await fetch('/list_speakers');
+                const data = await response.json();
+                const registeredSpeakers = data.speakers || [];
+                
+                // 更新模态框内容
+                document.getElementById('currentSpeakerName').textContent = currentSpeaker;
+                
+                // 填充下拉选择框
+                const speakerSelect = document.getElementById('speakerSelect');
+                speakerSelect.innerHTML = '<option value="">-- 选择已注册的说话人 --</option>';
+                
+                for (const speaker of registeredSpeakers) {
+                    const option = document.createElement('option');
+                    option.value = speaker.name;
+                    option.textContent = `${speaker.name} (注册于 ${new Date(speaker.registration_time * 1000).toLocaleString()})`;
+                    if (speaker.name === currentSpeaker) {
+                        option.selected = true;
+                    }
+                    speakerSelect.appendChild(option);
+                }
+                
+                // 清空新姓名输入框
+                document.getElementById('newSpeakerName').value = '';
+                
+                // 显示模态框
+                document.getElementById('speakerModal').style.display = 'block';
+                
+            } catch (error) {
+                console.error('加载说话人列表失败:', error);
+                alert('加载说话人列表失败，请检查网络连接');
+            }
+        }
+        
+        // 关闭模态框
+        function closeSpeakerModal() {
+            document.getElementById('speakerModal').style.display = 'none';
+            currentEditInfo = {};
+        }
+        
+        // 处理下拉选择变化
+        document.getElementById('speakerSelect').addEventListener('change', function() {
+            if (this.value) {
+                document.getElementById('newSpeakerName').value = '';
+            }
+        });
+        
+        // 处理新姓名输入
+        document.getElementById('newSpeakerName').addEventListener('input', function() {
+            if (this.value.trim()) {
+                document.getElementById('speakerSelect').value = '';
+            }
+        });
+        
+        // 保存说话人变更
+        async function saveSpeakerChange() {
+            try {
+                const selectedSpeaker = document.getElementById('speakerSelect').value;
+                const newSpeakerName = document.getElementById('newSpeakerName').value.trim();
+                
+                let finalSpeakerName = '';
+                
+                if (selectedSpeaker) {
+                    finalSpeakerName = selectedSpeaker;
+                } else if (newSpeakerName) {
+                    finalSpeakerName = newSpeakerName;
+                } else {
+                    alert('请选择一个已注册的说话人或输入新的姓名');
+                    return;
+                }
+                
+                if (finalSpeakerName === currentEditInfo.currentSpeaker) {
+                    closeSpeakerModal();
+                    return;
+                }
+                
+                // 发送更新请求
+                const updateResponse = await fetch('/update_segment_speaker', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        task_id: currentEditInfo.taskId,
+                        segment_index: currentEditInfo.segmentIndex,
+                        speaker_name: finalSpeakerName,
+                        audio_url: currentEditInfo.audioUrl
+                    })
+                });
+                
+                const updateResult = await updateResponse.json();
+                
+                if (updateResponse.ok) {
+                    // 更新页面显示
+                    const speakerElement = document.getElementById(`speaker_name_${currentEditInfo.segmentIndex}`);
+                    if (speakerElement) {
+                        speakerElement.textContent = finalSpeakerName;
+                        // 根据说话人名称设置颜色
+                        const colors = ['#007bff', '#28a745', '#dc3545', '#ffc107', '#17a2b8', '#6f42c1'];
+                        const colorIndex = finalSpeakerName.length % colors.length;
+                        speakerElement.style.color = colors[colorIndex];
+                    }
+                    
+                    // 显示成功消息
+                    showMessage(`✅ ${updateResult.message}`, 'success');
+                    
+                    // 关闭模态框
+                    closeSpeakerModal();
+                    
+                    console.log('说话人更新成功:', updateResult);
+                } else {
+                    alert(`更新失败: ${updateResult.error}`);
+                }
+                
+            } catch (error) {
+                console.error('保存说话人变更失败:', error);
+                alert('保存失败，请检查网络连接');
+            }
+        }
+        
+        // 显示消息函数
+        function showMessage(message, type = 'success') {
+            const messageDiv = document.createElement('div');
+            const bgColor = type === 'success' ? '#d4edda' : '#f8d7da';
+            const textColor = type === 'success' ? '#155724' : '#721c24';
+            const borderColor = type === 'success' ? '#c3e6cb' : '#f5c6cb';
+            
+            messageDiv.style.cssText = `position: fixed; top: 20px; right: 20px; background: ${bgColor}; color: ${textColor}; padding: 10px 15px; border-radius: 4px; z-index: 1001; border: 1px solid ${borderColor}; box-shadow: 0 2px 4px rgba(0,0,0,0.1);`;
+            messageDiv.textContent = message;
+            document.body.appendChild(messageDiv);
+            
+            // 3秒后自动移除消息
+            setTimeout(() => {
+                if (messageDiv.parentNode) {
+                    messageDiv.parentNode.removeChild(messageDiv);
+                }
+            }, 3000);
         }
     </script>
 </body>

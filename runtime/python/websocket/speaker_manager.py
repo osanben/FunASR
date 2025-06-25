@@ -23,8 +23,8 @@ class SpeakerManager:
         self.speaker_embeddings = self._load_embeddings()
         self.speaker_metadata = self._load_metadata()
         
-        # 相似度阈值
-        self.similarity_threshold = 0.75
+        # 相似度阈值 - 进一步降低阈值以提高匹配率
+        self.similarity_threshold = 0.30
         
     def _load_embeddings(self):
         """加载说话人嵌入向量数据库"""
@@ -76,18 +76,13 @@ class SpeakerManager:
             print(f"📊 采样率: {sample_rate}")
             print(f"📊 model_asr类型: {type(model_asr)}")
             
-            # 强制使用专门的说话人识别模型，不使用ASR模型
-            print("🤖 创建专门的说话人识别模型...")
-            from funasr import AutoModel
-            # 使用专门的说话人识别模型
-            spk_model = AutoModel(
-                model="iic/speech_campplus_sv_zh-cn_16k-common",
-                device="cpu",
-                disable_pbar=True,
-                disable_log=True,
-                disable_update=True
-            )
-            print("✅ 说话人识别模型创建成功")
+            # 使用传入的说话人识别模型（避免重复加载）
+            if model_asr is None:
+                print("❌ 没有传入说话人识别模型，无法提取嵌入向量")
+                return None
+            
+            print("✅ 使用传入的说话人识别模型")
+            spk_model = model_asr
             
             # 确保音频格式正确
             if audio_data.dtype != np.float32:
@@ -239,7 +234,7 @@ class SpeakerManager:
                 return None, 0.0, "数据库为空"
             
             # 提取当前音频段的嵌入向量
-            embedding = self.extract_speaker_embedding(audio_segment, model_asr=model_asr)
+            embedding = self.extract_speaker_embedding(audio_segment, sample_rate=16000, model_asr=model_asr)
             
             if embedding is None:
                 return None, 0.0, "嵌入向量提取失败"
