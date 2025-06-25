@@ -1,0 +1,21 @@
+{
+    "terminal.integrated.shell.osx": "/bin/zsh",
+    "terminal.integrated.defaultProfile.osx": "zsh",
+    "terminal.integrated.profiles.osx": {
+        "zsh": {
+            "path": "/bin/zsh",
+            "args": ["-l"]
+        },
+        "zsh-funasr": {
+            "path": "/bin/zsh",
+            "args": ["-l", "-c", "conda activate funasr && exec zsh"]
+        }
+    },
+    "terminal.integrated.env.osx": {
+        "CONDA_DEFAULT_ENV": "funasr",
+        "CONDA_PREFIX": "/Users/csdn/miniconda3/envs/funasr"
+    },
+    "python.defaultInterpreterPath": "/Users/csdn/miniconda3/envs/funasr/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "terminal.integrated.inheritEnv": true
+} 

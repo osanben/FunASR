@@ -154,6 +154,47 @@
     <div class="container">
         <h1>🎤 FunASR 文件上传语音识别</h1>
         
+        <!-- 说话人管理区域 -->
+        <div class="speaker-management" style="margin-bottom: 30px; padding: 20px; background-color: #f8f9fa; border-radius: 10px;">
+            <h3 style="color: #007bff; margin-bottom: 20px;">👥 说话人管理</h3>
+            
+            <!-- 注册新说话人 -->
+            <div class="speaker-register" style="margin-bottom: 20px; padding: 15px; background: white; border-radius: 8px;">
+                <h4 style="margin-bottom: 15px;">📝 注册新说话人</h4>
+                <div style="display: flex; gap: 10px; align-items: end; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 200px;">
+                        <label for="speakerName" style="display: block; margin-bottom: 5px; font-weight: bold;">姓名:</label>
+                        <input type="text" id="speakerName" placeholder="请输入说话人姓名" 
+                               style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+                    <div style="flex: 1; min-width: 200px;">
+                        <label for="speakerAudio" style="display: block; margin-bottom: 5px; font-weight: bold;">语音样本:</label>
+                        <input type="file" id="speakerAudio" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg"
+                               style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+                    <button onclick="registerSpeaker()" style="padding: 8px 16px; white-space: nowrap;">
+                        ➕ 注册说话人
+                    </button>
+                </div>
+                <p style="font-size: 12px; color: #666; margin-top: 5px;">
+                    语音样本建议：清晰录音，至少2秒，包含该说话人的特征声音
+                </p>
+            </div>
+            
+            <!-- 已注册说话人列表 -->
+            <div class="speaker-list" style="background: white; padding: 15px; border-radius: 8px;">
+                <h4 style="margin-bottom: 15px;">📋 已注册说话人</h4>
+                <div id="speakersList" style="max-height: 200px; overflow-y: auto;">
+                    <p style="color: #666; text-align: center;">暂无注册的说话人</p>
+                </div>
+                <div style="margin-top: 10px; text-align: right;">
+                    <button onclick="refreshSpeakersList()" style="background-color: #28a745; padding: 6px 12px; font-size: 14px;">
+                        🔄 刷新列表
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <div class="upload-area" id="uploadArea">
             <p>📁 拖拽音频文件到这里，或点击选择文件</p>
             <input type="file" id="audioFile" accept=".mp3,.wav,.m4a,.aac,.flac,.ogg" style="display: none;">
@@ -373,6 +414,39 @@
                             <p><strong>时间戳:</strong></p>
                             <div class="timestamp">${result.timestamp}</div>
                         ` : ''}
+                        
+                        ${result.speaker_segments && result.speaker_segments.length > 0 ? `
+                            <div style="margin-top: 20px;">
+                                <h5>👥 说话人分离结果</h5>
+                                <div style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 5px;">
+                                    ${result.speaker_segments.map(segment => `
+                                        <div style="padding: 10px; border-bottom: 1px solid #eee; background: ${segment.speaker.includes('说话人') ? '#f8f9fa' : '#e8f5e9'};">
+                                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                                                <strong style="color: ${segment.speaker.includes('说话人') ? '#6c757d' : '#28a745'};">
+                                                    🎤 ${segment.speaker}
+                                                </strong>
+                                                <span style="font-size: 12px; color: #666;">
+                                                    ${segment.start.toFixed(1)}s - ${segment.end.toFixed(1)}s
+                                                    ${segment.speaker_similarity ? ` (相似度: ${(segment.speaker_similarity * 100).toFixed(1)}%)` : ''}
+                                                </span>
+                                            </div>
+                                            <div style="color: #333; line-height: 1.4;">
+                                                ${segment.text}
+                                            </div>
+                                            ${segment.match_info && segment.match_info !== '匹配成功' ? `
+                                                <div style="font-size: 11px; color: #dc3545; margin-top: 5px;">
+                                                    ⚠️ ${segment.match_info}
+                                                </div>
+                                            ` : ''}
+                                        </div>
+                                    `).join('')}
+                                </div>
+                                <div style="margin-top: 10px; font-size: 12px; color: #666;">
+                                    📊 统计: 共检测到 ${new Set(result.speaker_segments.map(s => s.speaker)).size} 个说话人，
+                                    ${result.speaker_segments.filter(s => !s.speaker.includes('说话人')).length} 个片段已匹配到注册姓名
+                                </div>
+                            </div>
+                        ` : ''}
                     </div>
                 `;
             }
@@ -396,6 +470,121 @@
                 ws = null;
             }
         }
+        
+        // 说话人管理功能
+        async function registerSpeaker() {
+            const nameInput = document.getElementById('speakerName');
+            const audioInput = document.getElementById('speakerAudio');
+            
+            const speakerName = nameInput.value.trim();
+            const audioFile = audioInput.files[0];
+            
+            if (!speakerName) {
+                showStatus('error', '❌ 请输入说话人姓名');
+                return;
+            }
+            
+            if (!audioFile) {
+                showStatus('error', '❌ 请选择语音样本文件');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('speaker_name', speakerName);
+            formData.append('speaker_audio', audioFile);
+            
+            try {
+                showStatus('info', '📝 正在注册说话人...');
+                
+                const response = await fetch('https://gpu-pod6859164ddd21426e6e55774b-8080.node.inscode.run/register_speaker', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showStatus('success', `✅ ${result.message}`);
+                    nameInput.value = '';
+                    audioInput.value = '';
+                    refreshSpeakersList();
+                } else {
+                    showStatus('error', `❌ 注册失败: ${result.error}`);
+                }
+            } catch (error) {
+                showStatus('error', `❌ 注册失败: ${error.message}`);
+            }
+        }
+        
+        async function refreshSpeakersList() {
+            try {
+                const response = await fetch('https://gpu-pod6859164ddd21426e6e55774b-8080.node.inscode.run/list_speakers');
+                const result = await response.json();
+                
+                const speakersListDiv = document.getElementById('speakersList');
+                
+                if (response.ok && result.speakers && result.speakers.length > 0) {
+                    let html = '';
+                    result.speakers.forEach(speaker => {
+                        const registerTime = new Date(speaker.register_time * 1000).toLocaleString();
+                        html += `
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid #eee;">
+                                <div>
+                                    <strong>${speaker.name}</strong>
+                                    <br>
+                                    <small style="color: #666;">
+                                        注册时间: ${registerTime} | 
+                                        音频时长: ${speaker.audio_duration.toFixed(1)}秒
+                                    </small>
+                                </div>
+                                <button onclick="deleteSpeaker('${speaker.id}')" 
+                                        style="background-color: #dc3545; padding: 4px 8px; font-size: 12px;">
+                                    🗑️ 删除
+                                </button>
+                            </div>
+                        `;
+                    });
+                    speakersListDiv.innerHTML = html;
+                } else {
+                    speakersListDiv.innerHTML = '<p style="color: #666; text-align: center;">暂无注册的说话人</p>';
+                }
+            } catch (error) {
+                console.error('获取说话人列表失败:', error);
+                document.getElementById('speakersList').innerHTML = '<p style="color: #dc3545; text-align: center;">获取列表失败</p>';
+            }
+        }
+        
+        async function deleteSpeaker(speakerId) {
+            if (!confirm('确定要删除这个说话人吗？')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('https://gpu-pod6859164ddd21426e6e55774b-8080.node.inscode.run/delete_speaker', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ speaker_id: speakerId })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showStatus('success', `✅ ${result.message}`);
+                    refreshSpeakersList();
+                } else {
+                    showStatus('error', `❌ 删除失败: ${result.error}`);
+                }
+            } catch (error) {
+                showStatus('error', `❌ 删除失败: ${error.message}`);
+            }
+        }
+        
+        // 页面加载时刷新说话人列表
+        document.addEventListener('DOMContentLoaded', function() {
+            refreshSpeakersList();
+        });
     </script>
 </body>
 </html> 

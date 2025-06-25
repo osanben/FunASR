@@ -17,6 +17,7 @@ from aiohttp import web, web_request
 import aiohttp_cors
 import tempfile
 import shutil
+from speaker_manager_debug import SpeakerManager
 try:
     from opencc import OpenCC  # 繁简转换
     cc = OpenCC('t2s')  # 繁体转简体
@@ -44,6 +45,9 @@ task_lock = threading.Lock()
 # 线程池用于音频处理
 executor = ThreadPoolExecutor(max_workers=4)
 
+# 说话人管理器
+speaker_manager = None
+
 # 解析命令行参数
 parser = argparse.ArgumentParser()
 parser.add_argument("--host", type=str, default="0.0.0.0", help="WebSocket服务器地址")
@@ -56,8 +60,21 @@ parser.add_argument("--device", type=str, default="cpu", help="设备类型")
 parser.add_argument("--ngpu", type=int, default=1, help="GPU数量")
 parser.add_argument("--ncpu", type=int, default=4, help="CPU数量")
 parser.add_argument("--upload_dir", type=str, default="./uploads", help="文件上传目录")
+parser.add_argument("--env", type=str, default="local", choices=["local", "test"], help="运行环境：local或test")
 
 args = parser.parse_args()
+
+# 根据环境设置服务器地址
+if args.env == "local":
+    HTTP_BASE_URL = f"http://127.0.0.1:{args.http_port}"
+    WS_BASE_URL = f"ws://127.0.0.1:{args.port}"
+else:  # test环境
+    HTTP_BASE_URL = "https://gpu-pod6859164ddd21426e6e55774b-8080.node.inscode.run"
+    WS_BASE_URL = "wss://gpu-pod6859164ddd21426e6e55774b-10095.node.inscode.run"
+
+print(f"🌍 运行环境: {args.env}")
+print(f"🌐 HTTP地址: {HTTP_BASE_URL}")
+print(f"🌐 WebSocket地址: {WS_BASE_URL}")
 
 # 创建上传目录
 os.makedirs(args.upload_dir, exist_ok=True)
@@ -131,6 +148,11 @@ if args.model_type in ["paraformer", "sensevoice", "hybrid"]:
         print(f"❌ FunASR 模型加载失败: {e}")
 
 print("🎉 所有模型加载完成!")
+
+# 初始化说话人管理器
+print("🎯 初始化说话人管理器...")
+speaker_manager = SpeakerManager()
+print("✅ 说话人管理器初始化完成!")
 
 def process_audio_file(file_path, task_id, model_type):
     """处理音频文件的主函数"""
@@ -907,6 +929,44 @@ def funasr_transcribe(audio_data, sample_rate=16000):
             
             print(f"🎉 最终说话人分析结果: {unique_speakers}个说话人")
             
+            # 🎯 说话人姓名匹配
+            if speaker_manager and speaker_segments:
+                print("🔍 开始说话人姓名匹配...")
+                enhanced_segments = []
+                
+                for segment in speaker_segments:
+                    # 提取音频片段
+                    start_sample = int(segment["start"] * sample_rate)
+                    end_sample = int(segment["end"] * sample_rate)
+                    
+                    # 确保索引在有效范围内
+                    start_sample = max(0, start_sample)
+                    end_sample = min(len(audio_data), end_sample)
+                    
+                    if end_sample > start_sample:
+                        audio_segment = audio_data[start_sample:end_sample]
+                        
+                        # 匹配说话人
+                        matched_name, similarity, match_info = speaker_manager.match_speaker(
+                            audio_segment, model_asr=model_asr
+                        )
+                        
+                        # 更新说话人信息
+                        if matched_name:
+                            segment["speaker"] = matched_name
+                            segment["speaker_similarity"] = similarity
+                            segment["match_info"] = match_info
+                            print(f"✅ 匹配成功: {segment['text'][:20]}... -> {matched_name} (相似度: {similarity:.3f})")
+                        else:
+                            segment["speaker_similarity"] = similarity
+                            segment["match_info"] = match_info
+                            print(f"❓ 未匹配: {segment['text'][:20]}... -> {segment['speaker']} (相似度: {similarity:.3f})")
+                    
+                    enhanced_segments.append(segment)
+                
+                speaker_segments = enhanced_segments
+                print("🎯 说话人姓名匹配完成!")
+            
             return {
                 "text": text,
                 "timestamp": timestamp_text.strip(),
@@ -947,15 +1007,27 @@ def send_progress_update(task_id, status, progress, message, results=None):
 
 # 状态查询处理
 def clean_nan_values(obj):
-    """递归清理对象中的NaN值"""
+    """递归清理对象中的NaN值和不可序列化的numpy类型"""
+    import numpy as np
+    
     if isinstance(obj, dict):
         return {k: clean_nan_values(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [clean_nan_values(item) for item in obj]
-    elif isinstance(obj, float):
+    elif isinstance(obj, (float, np.floating)):
+        # 处理float和numpy浮点类型
         if np.isnan(obj) or np.isinf(obj):
             return 0.0
-        return obj
+        return float(obj)  # 转换为Python原生float
+    elif isinstance(obj, (int, np.integer)):
+        # 处理numpy整数类型
+        return int(obj)
+    elif isinstance(obj, np.ndarray):
+        # 处理numpy数组
+        return clean_nan_values(obj.tolist())
+    elif hasattr(obj, 'item'):
+        # 处理numpy标量
+        return clean_nan_values(obj.item())
     else:
         return obj
 
@@ -1044,6 +1116,88 @@ async def upload_handler(request):
         return web.json_response({"error": str(e)}, status=500)
 
 # WebSocket处理
+# 说话人管理API处理函数
+async def register_speaker_handler(request):
+    """注册新说话人"""
+    try:
+        reader = await request.multipart()
+        
+        speaker_name = None
+        audio_file_data = None
+        audio_filename = None
+        
+        # 解析multipart数据
+        async for field in reader:
+            if field.name == 'speaker_name':
+                speaker_name = await field.text()
+            elif field.name == 'speaker_audio':
+                audio_filename = field.filename
+                audio_file_data = await field.read()
+        
+        if not speaker_name:
+            return web.json_response({"error": "缺少说话人姓名"}, status=400)
+        
+        if not audio_file_data:
+            return web.json_response({"error": "缺少语音样本文件"}, status=400)
+        
+        # 保存临时文件
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f"_{audio_filename}")
+        temp_file.write(audio_file_data)
+        temp_file.close()
+        
+        try:
+            # 注册说话人
+            print(f"🎯 开始注册说话人: {speaker_name}, 文件: {temp_file.name}")
+            success, message = speaker_manager.register_speaker(
+                speaker_name, temp_file.name, model_asr=model_asr
+            )
+            print(f"📊 注册结果: success={success}, message={message}")
+            
+            if success:
+                return web.json_response({"message": message})
+            else:
+                return web.json_response({"error": message}, status=400)
+                
+        finally:
+            # 清理临时文件
+            try:
+                os.unlink(temp_file.name)
+            except:
+                pass
+                
+    except Exception as e:
+        print(f"❌ 注册说话人错误: {e}")
+        return web.json_response({"error": f"注册失败: {str(e)}"}, status=500)
+
+async def list_speakers_handler(request):
+    """获取已注册说话人列表"""
+    try:
+        speakers = speaker_manager.get_registered_speakers()
+        return web.json_response({"speakers": speakers})
+    except Exception as e:
+        print(f"❌ 获取说话人列表错误: {e}")
+        return web.json_response({"error": f"获取列表失败: {str(e)}"}, status=500)
+
+async def delete_speaker_handler(request):
+    """删除说话人"""
+    try:
+        data = await request.json()
+        speaker_id = data.get("speaker_id")
+        
+        if not speaker_id:
+            return web.json_response({"error": "缺少说话人ID"}, status=400)
+        
+        success, message = speaker_manager.delete_speaker(speaker_id)
+        
+        if success:
+            return web.json_response({"message": message})
+        else:
+            return web.json_response({"error": message}, status=400)
+            
+    except Exception as e:
+        print(f"❌ 删除说话人错误: {e}")
+        return web.json_response({"error": f"删除失败: {str(e)}"}, status=500)
+
 async def websocket_handler(websocket):
     """WebSocket连接处理"""
     task_id = None
@@ -1103,13 +1257,43 @@ async def create_http_app():
     # 添加实时录音页面路由
     app.router.add_get('/realtime', realtime_handler)
     
+    # 添加说话人管理API
+    app.router.add_post('/register_speaker', register_speaker_handler)
+    app.router.add_get('/list_speakers', list_speakers_handler)
+    app.router.add_post('/delete_speaker', delete_speaker_handler)
+    
     # 添加静态文件路由
     current_dir = os.path.dirname(os.path.abspath(__file__))
     app.router.add_get('/recorder-core.js', lambda request: web.FileResponse(os.path.join(current_dir, 'recorder-core.js')))
     app.router.add_get('/pcm.js', lambda request: web.FileResponse(os.path.join(current_dir, 'pcm.js')))
     
+    # 添加upload_demo.html页面路由（动态替换服务器地址）
+    async def upload_demo_handler(request):
+        try:
+            html_file = os.path.join(current_dir, 'upload_demo.html')
+            with open(html_file, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            
+            # 替换服务器地址
+            html_content = html_content.replace(
+                'https://gpu-pod6859164ddd21426e6e55774b-8080.node.inscode.run', 
+                HTTP_BASE_URL
+            )
+            html_content = html_content.replace(
+                'wss://gpu-pod6859164ddd21426e6e55774b-10095.node.inscode.run/', 
+                WS_BASE_URL + '/'
+            )
+            
+            return web.Response(text=html_content, content_type='text/html')
+        except Exception as e:
+            return web.Response(text=f"Error loading page: {e}", status=500)
+    
+    app.router.add_get('/upload_demo.html', upload_demo_handler)
+    app.router.add_get('/upload_demo', upload_demo_handler)
+    
     # 添加静态文件服务（可选）
-    app.router.add_get('/', lambda request: web.Response(text="""
+    async def root_handler(request):
+        html_template = """
 <!DOCTYPE html>
 <html>
 <head>
@@ -1170,7 +1354,7 @@ async def create_http_app():
         });
         
         function connectWebSocket(taskId) {
-            ws = new WebSocket(`wss://gpu-pod6859164ddd21426e6e55774b-10095.node.inscode.run/`);
+            ws = new WebSocket(`{WS_BASE_URL}/`);
             
             ws.onopen = function() {
                 ws.send(JSON.stringify({
@@ -1296,7 +1480,13 @@ async def create_http_app():
     </script>
 </body>
 </html>
-    """, content_type='text/html'))
+        """
+        
+        # 替换WebSocket地址
+        html_content = html_template.replace('{WS_BASE_URL}', WS_BASE_URL)
+        return web.Response(text=html_content, content_type='text/html')
+    
+    app.router.add_get('/', root_handler)
     
     # 为所有路由添加CORS
     for route in list(app.router.routes()):
