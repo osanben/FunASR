@@ -115,10 +115,12 @@ class ConcurrencyController:
         cpu_percent = psutil.cpu_percent(interval=1)
         memory_percent = psutil.virtual_memory().percent
         
-        # 根据性能调整并发数
+        # 根据性能调整并发数 - 使用保守的上限
         if cpu_percent < 70 and memory_percent < 80 and avg_time < 30:
             # 系统负载低且处理快，可以增加并发
-            new_max = min(self.max_workers + 1, optimal_workers * 2)
+            # 使用保守的上限，避免引用未定义的optimal_workers
+            max_allowed = 8  # 保守的最大并发数
+            new_max = min(self.max_workers + 1, max_allowed)
             if new_max > self.max_workers:
                 self.max_workers = new_max
                 print(f"🚀 增加并发数至: {self.max_workers}")
@@ -280,36 +282,45 @@ print("🗄️ 初始化数据库...")
 db = FunASRDatabase()
 print("✅ 数据库初始化完成!")
 
-# 线程池用于音频处理 - 动态配置
+# 线程池用于音频处理 - 保守配置避免资源耗尽
 def get_optimal_workers():
-    """根据设备类型和资源情况动态计算最优worker数量"""
+    """根据设备类型和资源情况动态计算最优worker数量 - 保守策略"""
     import os
-    cpu_count = os.cpu_count()
+    cpu_count = os.cpu_count() or 4  # 防止None
     
     if args.device == "cuda" or args.device == "gpu":
-        # GPU环境：可以支持更高并发，因为GPU并行处理能力强
-        if args.ngpu >= 2:
-            return min(cpu_count * 2, 16)  # 多GPU可以支持更高并发
-        else:
-            return min(cpu_count, 12)      # 单GPU适中并发
+        # GPU环境：保守配置，避免线程创建失败
+        # GPU本身就有并行能力，不需要太多CPU线程
+        return min(4, max(2, cpu_count // 2))  # 最多4个，最少2个
     elif args.device == "cpu":
-        # CPU环境：根据CPU核心数调整
-        return min(cpu_count, 8)
+        # CPU环境：也要保守，避免OpenMP冲突
+        return min(6, max(2, cpu_count // 2))  # 最多6个，最少2个
     else:
-        return 4  # 默认值
+        return 2  # 最保守的默认值
 
 # 动态设置线程池大小
+# 设置环境变量限制OpenMP线程数，防止libgomp线程创建失败
+import os
+os.environ['OMP_NUM_THREADS'] = '2'  # 限制OpenMP线程数
+os.environ['MKL_NUM_THREADS'] = '2'  # 限制MKL线程数
+os.environ['NUMEXPR_NUM_THREADS'] = '2'  # 限制NumExpr线程数
+os.environ['OPENBLAS_NUM_THREADS'] = '2'  # 限制OpenBLAS线程数
+
 print("🔧 初始化线程池和并发控制器...")
+print("🚫 已设置线程限制环境变量，防止资源耗尽")
 optimal_workers = get_optimal_workers()
 executor = ThreadPoolExecutor(max_workers=optimal_workers)
 print(f"🔧 线程池配置: {optimal_workers} workers (设备: {args.device}, GPU数量: {args.ngpu})")
 
-# 创建并发控制器
-concurrency_controller = ConcurrencyController(optimal_workers)
+# 创建并发控制器 - 进一步限制并发数
+# 在GPU环境下，实际并发数应该更保守
+actual_max_concurrent = max(2, optimal_workers // 2) if args.device in ["cuda", "gpu"] else optimal_workers
+concurrency_controller = ConcurrencyController(actual_max_concurrent)
+print(f"🚦 并发控制器配置: 最大并发数 {actual_max_concurrent}")
 
-# GPU优化配置
+# GPU优化配置 - 保守策略
 def optimize_gpu_settings():
-    """优化GPU设置"""
+    """优化GPU设置 - 保守策略避免资源耗尽"""
     global gpu_batch_size
     
     if args.device in ["cuda", "gpu"]:
@@ -317,29 +328,32 @@ def optimize_gpu_settings():
             import torch
             if torch.cuda.is_available():
                 gpu_count = torch.cuda.device_count()
+                print(f"🎮 检测到 {gpu_count} 个GPU")
+                
                 for i in range(gpu_count):
-                    gpu_memory = torch.cuda.get_device_properties(i).total_memory / 1024**3
-                    print(f"🎮 GPU {i}: {torch.cuda.get_device_name(i)}, 显存: {gpu_memory:.1f}GB")
+                    try:
+                        gpu_memory = torch.cuda.get_device_properties(i).total_memory / 1024**3
+                        gpu_name = torch.cuda.get_device_name(i)
+                        print(f"🎮 GPU {i}: {gpu_name}, 显存: {gpu_memory:.1f}GB")
+                    except Exception as e:
+                        print(f"⚠️ 无法获取GPU {i} 信息: {e}")
                 
-                # 根据显存大小调整批处理
-                if gpu_memory >= 24:  # 24GB+
-                    gpu_batch_size = 4
-                elif gpu_memory >= 12:  # 12GB+
-                    gpu_batch_size = 2
-                else:  # <12GB
-                    gpu_batch_size = 1
-                    
-                print(f"🚀 GPU批处理大小: {gpu_batch_size}")
+                # 保守的批处理大小设置
+                gpu_batch_size = 1  # 始终使用最小批处理，避免内存问题
+                print(f"🚀 GPU批处理大小: {gpu_batch_size} (保守设置)")
                 
-                # 设置GPU内存优化
+                # 保守的GPU内存设置
                 torch.cuda.empty_cache()
                 if hasattr(torch.cuda, 'set_per_process_memory_fraction'):
-                    torch.cuda.set_per_process_memory_fraction(0.9)  # 使用90%显存
+                    torch.cuda.set_per_process_memory_fraction(0.7)  # 只使用70%显存，更保守
+                    print("🎯 GPU内存使用限制: 70%")
                     
         except ImportError:
             print("⚠️ PyTorch未安装，无法进行GPU优化")
         except Exception as e:
             print(f"⚠️ GPU优化失败: {e}")
+    else:
+        print("💻 CPU模式，跳过GPU优化")
 
 # 执行GPU优化
 optimize_gpu_settings()
@@ -374,29 +388,18 @@ def monitor_gpu_memory():
     return {}
 
 def optimize_batch_processing():
-    """根据当前负载优化批处理"""
+    """简化的批处理优化 - 保持稳定"""
     global gpu_batch_size
     
     if args.device in ["cuda", "gpu"]:
         try:
-            import torch
-            if torch.cuda.is_available():
-                # 获取GPU内存使用情况
-                memory_info = monitor_gpu_memory()
-                current_tasks = concurrency_controller.current_tasks
-                
-                # 根据当前任务数和GPU内存动态调整批处理大小
-                if current_tasks <= 2:
-                    # 低负载时可以使用更大的批处理
-                    gpu_batch_size = min(4, gpu_batch_size + 1)
-                elif current_tasks >= 6:
-                    # 高负载时减少批处理大小
-                    gpu_batch_size = max(1, gpu_batch_size - 1)
-                
-                print(f"🔧 动态调整批处理大小: {gpu_batch_size} (当前任务: {current_tasks})")
-                
+            # 保持批处理大小稳定，避免动态调整导致的不稳定
+            gpu_batch_size = 1
+            current_tasks = getattr(concurrency_controller, 'current_tasks', 0)
+            print(f"🔧 批处理大小: {gpu_batch_size} (当前任务: {current_tasks})")
         except Exception as e:
             print(f"⚠️ 批处理优化失败: {e}")
+            gpu_batch_size = 1
 
 print("✅ 线程池和并发控制器初始化完成!")
 
@@ -2778,7 +2781,7 @@ async def main():
     print(f"🎯 模型类型: {args.model_type}")
     print(f"🌐 HTTP服务: http://{args.host}:{args.http_port}")
     print(f"🌐 WebSocket服务: ws://{args.host}:{args.port}")
-    print(f"🧵 线程池大小: {optimal_workers}")
+    print(f"🧵 线程池大小: {executor._max_workers if executor else 'Unknown'}")
     print(f"🎮 GPU批处理大小: {gpu_batch_size}")
     
     # 启动系统监控器
