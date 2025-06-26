@@ -700,27 +700,6 @@ def whisper_transcribe(audio_data, sample_rate=16000):
 
 def detect_speakers_with_voice_print(audio_data, segments, sample_rate=16000):
     """使用专业音色模型进行说话人分离"""
-    
-    # 🔧 在函数开始就限制线程数
-    import os
-    import torch
-    
-    # 保存全局原始设置
-    global_original_omp = os.environ.get('OMP_NUM_THREADS', '1')
-    global_original_mkl = os.environ.get('MKL_NUM_THREADS', '1')
-    global_original_torch = torch.get_num_threads()
-    
-    # 设置严格的单线程模式
-    os.environ['OMP_NUM_THREADS'] = '1'
-    os.environ['MKL_NUM_THREADS'] = '1'
-    os.environ['OPENBLAS_NUM_THREADS'] = '1'
-    os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
-    os.environ['NUMEXPR_NUM_THREADS'] = '1'
-    os.environ['BLIS_NUM_THREADS'] = '1'
-    torch.set_num_threads(1)
-    
-    print("🔧 已设置说话人识别单线程模式")
-    
     try:
         if not segments:
             return []
@@ -728,26 +707,8 @@ def detect_speakers_with_voice_print(audio_data, segments, sample_rate=16000):
         print("🎯 使用专业音色模型进行说话人分离...")
         
         # 方法1: 使用FunASR的CAM++说话人模型
-        try:            print("🔧 调用FunASR CAM++说话人识别模型...")
-            
-            # 🔧 强制限制CAM++模型的线程数
-            import os
-            import torch
-            
-            # 保存原始设置
-            original_omp_threads = os.environ.get('OMP_NUM_THREADS', '1')
-            original_mkl_threads = os.environ.get('MKL_NUM_THREADS', '1')
-            original_torch_threads = torch.get_num_threads()
-            
-            # 强制设置为单线程
-            os.environ['OMP_NUM_THREADS'] = '1'
-            os.environ['MKL_NUM_THREADS'] = '1'
-            os.environ['OPENBLAS_NUM_THREADS'] = '1'
-            os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
-            os.environ['NUMEXPR_NUM_THREADS'] = '1'
-            torch.set_num_threads(1)
-            
-            try:
+        try:
+            print("🔧 调用FunASR CAM++说话人识别模型...")
             
             # 使用专门的说话人分离参数
             res = model_asr.generate(
@@ -814,58 +775,31 @@ def detect_speakers_with_voice_print(audio_data, segments, sample_rate=16000):
                                     "speaker": f"说话人{mapped_speaker_id}",
                                     "confidence": 0.95,  # CAM++置信度
                                     "duration": end_time - start_time
-                                })                        print(f"✅ CAM++模型检测到{len(unique_spk_ids)}个说话人")
+                                })
+                        
+                        print(f"✅ CAM++模型检测到{len(unique_spk_ids)}个说话人")
                         return enhanced_segments
                     else:
                         print(f"⚠️ CAM++模型只检测到1个说话人")
-            
-            finally:
-                # 🔧 恢复原始线程设置
-                os.environ['OMP_NUM_THREADS'] = original_omp_threads
-                os.environ['MKL_NUM_THREADS'] = original_mkl_threads
-                torch.set_num_threads(original_torch_threads)
-                print("🔧 已恢复原始线程设置")
             
         except Exception as e:
             print(f"⚠️ CAM++模型调用失败: {e}")
         
         # 方法2: 尝试使用其他专业音色模型
-        try:            print("🔧 尝试使用独立的说话人识别模型...")
-            
-            # 🔧 强制限制独立模型的线程数
-            import os
-            import torch
-            
-            # 保存原始设置
-            original_omp_threads2 = os.environ.get('OMP_NUM_THREADS', '1')
-            original_mkl_threads2 = os.environ.get('MKL_NUM_THREADS', '1')
-            original_torch_threads2 = torch.get_num_threads()
-            
-            # 强制设置为单线程
-            os.environ['OMP_NUM_THREADS'] = '1'
-            os.environ['MKL_NUM_THREADS'] = '1'
-            os.environ['OPENBLAS_NUM_THREADS'] = '1'
-            os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
-            os.environ['NUMEXPR_NUM_THREADS'] = '1'
-            torch.set_num_threads(1)
-            
-            try:
+        try:
+            print("🔧 尝试使用独立的说话人识别模型...")
             
             # 直接调用说话人模型进行嵌入向量提取
-            from funasr import AutoModel            # 加载专门的说话人识别模型
+            from funasr import AutoModel
+            
+            # 加载专门的说话人识别模型
             spk_model = AutoModel(
                 model="iic/speech_campplus_sv_zh-cn_16k-common",
                 device="cpu",
                 disable_pbar=True,
                 disable_log=True,
-                disable_update=True,  # 禁用自动更新检查
-                # 🔧 强制单线程模式
-                torch_dtype=torch.float32,
-                low_cpu_mem_usage=True
+                disable_update=True  # 禁用自动更新检查
             )
-            
-            # 🔧 再次确保模型使用单线程
-            torch.set_num_threads(1)
             
             # 为每个语音段提取说话人嵌入向量
             embeddings = []
@@ -989,36 +923,19 @@ def detect_speakers_with_voice_print(audio_data, segments, sample_rate=16000):
                                 "speaker": f"说话人{speaker_id}",
                                 "confidence": 0.85,
                                 "duration": end_time - start_time
-                            })                        print(f"✅ 独立音色模型检测到{unique_labels}个说话人")
+                            })
+                        
+                        print(f"✅ 独立音色模型检测到{unique_labels}个说话人")
                         return enhanced_segments
                         
-            finally:
-                # 🔧 恢复原始线程设置
-                os.environ['OMP_NUM_THREADS'] = original_omp_threads2
-                os.environ['MKL_NUM_THREADS'] = original_mkl_threads2
-                torch.set_num_threads(original_torch_threads2)
-                print("🔧 已恢复独立模型线程设置")
-                        
         except Exception as e:
-            print(f"⚠️ 独立音色模型失败: {e}")        # 回退到默认模式
+            print(f"⚠️ 独立音色模型失败: {e}")
+        
+        # 回退到默认模式
         print("⚠️ 音色模型无法分离说话人，回退到单人模式")
         return detect_speakers_fallback(segments)
         
-    finally:
-        # 🔧 恢复全局线程设置
-        os.environ['OMP_NUM_THREADS'] = global_original_omp
-        os.environ['MKL_NUM_THREADS'] = global_original_mkl
-        torch.set_num_threads(global_original_torch)
-        print("🔧 已恢复全局线程设置")
-        
     except Exception as e:
-        # 🔧 异常情况下也要恢复线程设置
-        try:
-            os.environ['OMP_NUM_THREADS'] = global_original_omp
-            os.environ['MKL_NUM_THREADS'] = global_original_mkl
-            torch.set_num_threads(global_original_torch)
-        except:
-            pass
         print(f"⚠️ 说话人分离失败，回退到简单模式: {e}")
         return detect_speakers_fallback(segments)
 
