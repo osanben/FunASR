@@ -1,0 +1,41 @@
+# FunASR 完整依赖列表 (修复版)
+# 核心依赖
+# funasr>=1.0.25  # 注释掉，改为本地安装
+torch>=2.0.0
+torchaudio>=2.0.0
+numpy>=1.21.0
+scipy>=1.7.0
+
+# 音频处理
+librosa==0.10.1
+soundfile==0.12.1
+pyannote.audio>=3.0.0
+
+# 机器学习
+scikit-learn>=1.0.0
+
+# Web服务
+aiohttp==3.8.6
+aiohttp-cors==0.7.0
+websockets==11.0.3
+
+# 系统监控
+psutil>=5.8.0
+
+# 文本处理
+opencc-python-reimplemented>=1.1.0
+
+# 语音识别
+openai-whisper>=20230314
+
+# 数据库和工具
+pathlib2>=2.3.0
+# uuid>=1.30  # uuid是Python内置模块，不需要单独安装
+
+# GPU支持 (可选，根据需要安装)
+# nvidia-ml-py3>=7.352.0  # NVIDIA GPU监控
+
+# 开发和调试工具 (可选)
+# jupyter>=1.0.0
+# matplotlib>=3.5.0
+# seaborn>=0.11.0 
