@@ -81,28 +81,7 @@
 
             <!-- 主内容 -->
             <div class="flex-1 p-6 overflow-y-auto">
-            <!-- 系统信息 -->
-            <div class="bg-white rounded-lg shadow p-6 mb-8">
-                <h2 class="text-lg font-semibold mb-4">🖥️ 系统信息</h2>
-                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div class="text-center">
-                        <div class="text-sm text-gray-600">机器名称</div>
-                        <div class="font-semibold" id="machineName">加载中...</div>
-                    </div>
-                    <div class="text-center">
-                        <div class="text-sm text-gray-600">模型类型</div>
-                        <div class="font-semibold" id="modelType">加载中...</div>
-                    </div>
-                    <div class="text-center">
-                        <div class="text-sm text-gray-600">设备类型</div>
-                        <div class="font-semibold" id="deviceType">加载中...</div>
-                    </div>
-                    <div class="text-center">
-                        <div class="text-sm text-gray-600">运行时间</div>
-                        <div class="font-semibold" id="uptime">加载中...</div>
-                    </div>
-                </div>
-            </div>
+
 
             <!-- 性能指标概览 -->
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -159,15 +138,81 @@
                 </div>
             </div>
 
-            <!-- 性能图表 -->
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
-                <div class="bg-white rounded-lg shadow p-6">
-                    <h3 class="text-lg font-semibold mb-4">处理时间分布</h3>
-                    <canvas id="processingTimeChart" width="400" height="200"></canvas>
+
+
+            <!-- 机器效率汇总统计 -->
+            <div class="bg-white rounded-lg shadow mb-8">
+                <div class="p-6 border-b">
+                    <h3 class="text-lg font-semibold">🚀 机器效率汇总统计</h3>
                 </div>
-                <div class="bg-white rounded-lg shadow p-6">
-                    <h3 class="text-lg font-semibold mb-4">处理倍率趋势</h3>
-                    <canvas id="ratioTrendChart" width="400" height="200"></canvas>
+                <div class="p-6">
+                    <!-- 效率指标卡片 -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                        <div class="bg-gradient-to-r from-blue-50 to-blue-100 rounded-lg p-4">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-sm text-blue-600 font-medium">转录效率比</p>
+                                    <p class="text-2xl font-bold text-blue-700" id="transcriptionRatio">0.0x</p>
+                                    <p class="text-xs text-blue-500">转录时间/音频时长</p>
+                                </div>
+                                <div class="text-3xl text-blue-400">⚡</div>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-gradient-to-r from-green-50 to-green-100 rounded-lg p-4">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-sm text-green-600 font-medium">平均并发数</p>
+                                    <p class="text-2xl font-bold text-green-700" id="avgConcurrent">0</p>
+                                    <p class="text-xs text-green-500">同时处理任务数</p>
+                                </div>
+                                <div class="text-3xl text-green-400">🔄</div>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-gradient-to-r from-purple-50 to-purple-100 rounded-lg p-4">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-sm text-purple-600 font-medium">吞吐量</p>
+                                    <p class="text-2xl font-bold text-purple-700" id="throughput">0</p>
+                                    <p class="text-xs text-purple-500">小时/音频时长</p>
+                                </div>
+                                <div class="text-3xl text-purple-400">📈</div>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-gradient-to-r from-orange-50 to-orange-100 rounded-lg p-4">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-sm text-orange-600 font-medium">机器数量</p>
+                                    <p class="text-2xl font-bold text-orange-700" id="machineCount">0</p>
+                                    <p class="text-xs text-orange-500">活跃机器总数</p>
+                                </div>
+                                <div class="text-3xl text-orange-400">🖥️</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- 按机器维度统计表格 -->
+                    <div class="overflow-x-auto">
+                        <h4 class="text-md font-semibold mb-4">📊 按机器维度统计</h4>
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">机器名</th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">任务数</th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">总音频时长</th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">总转录时间</th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">转录效率比</th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">平均处理倍率</th>
+                                    <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">效率等级</th>
+                                </tr>
+                            </thead>
+                            <tbody id="machineStatsTableBody" class="bg-white divide-y divide-gray-200">
+                                <!-- 机器统计数据将在这里动态加载 -->
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
 
@@ -193,6 +238,9 @@
                             <tr>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                     文件名
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    机器名
                                 </th>
                                 <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                     音频时长
@@ -240,14 +288,11 @@
     </div>
 
     <script>
-        let processingTimeChart = null;
-        let ratioTrendChart = null;
         let performanceData = [];
 
         // 页面加载完成后初始化
         document.addEventListener('DOMContentLoaded', function() {
             initCharts();
-            loadSystemInfo();
             loadPerformanceStats();
             loadPerformanceData();
             
@@ -256,92 +301,10 @@
         });
 
         function initCharts() {
-            // 处理时间分布图
-            const ctx1 = document.getElementById('processingTimeChart').getContext('2d');
-            processingTimeChart = new Chart(ctx1, {
-                type: 'bar',
-                data: {
-                    labels: ['转录', '说话人分离', '匹配'],
-                    datasets: [{
-                        label: '平均时间 (秒)',
-                        data: [0, 0, 0],
-                        backgroundColor: [
-                            'rgba(59, 130, 246, 0.8)',
-                            'rgba(16, 185, 129, 0.8)',
-                            'rgba(245, 158, 11, 0.8)'
-                        ],
-                        borderColor: [
-                            'rgb(59, 130, 246)',
-                            'rgb(16, 185, 129)',
-                            'rgb(245, 158, 11)'
-                        ],
-                        borderWidth: 1
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    scales: {
-                        y: {
-                            beginAtZero: true
-                        }
-                    }
-                }
-            });
-
-            // 处理倍率趋势图
-            const ctx2 = document.getElementById('ratioTrendChart').getContext('2d');
-            ratioTrendChart = new Chart(ctx2, {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: '处理倍率',
-                        data: [],
-                        borderColor: 'rgb(59, 130, 246)',
-                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                        tension: 0.1
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    scales: {
-                        y: {
-                            beginAtZero: true,
-                            title: {
-                                display: true,
-                                text: '倍率 (x)'
-                            }
-                        }
-                    }
-                }
-            });
+            // 图表已移除，保留函数以避免错误
         }
 
-        async function loadSystemInfo() {
-            try {
-                // 这里可以添加获取系统信息的API调用
-                document.getElementById('machineName').textContent = navigator.platform || 'Unknown';
-                document.getElementById('modelType').textContent = 'Paraformer';
-                document.getElementById('deviceType').textContent = 'CPU';
-                
-                // 模拟运行时间
-                const startTime = Date.now() - Math.random() * 86400000; // 随机1天内的时间
-                updateUptime(startTime);
-            } catch (error) {
-                console.error('加载系统信息失败:', error);
-            }
-        }
 
-        function updateUptime(startTime) {
-            const updateTime = () => {
-                const uptime = Date.now() - startTime;
-                const hours = Math.floor(uptime / 3600000);
-                const minutes = Math.floor((uptime % 3600000) / 60000);
-                document.getElementById('uptime').textContent = `${hours}h ${minutes}m`;
-            };
-            updateTime();
-            setInterval(updateTime, 60000); // 每分钟更新
-        }
 
         async function loadPerformanceStats() {
             try {
@@ -379,7 +342,6 @@
                 } else {
                     emptyState.style.display = 'none';
                     renderPerformanceTable();
-                    updateCharts();
                 }
                 
             } catch (error) {
@@ -398,6 +360,11 @@
                     <tr class="hover:bg-gray-50">
                         <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                             ${item.filename || 'Unknown'}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            <span class="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full">
+                                ${item.machine_name || 'Unknown'}
+                            </span>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                             ${formatDuration(item.audio_duration)}
@@ -425,29 +392,152 @@
                     </tr>
                 `;
             }).join('');
+            
+            // 更新机器效率统计
+            updateMachineEfficiencyStats();
+        }
+
+        function updateMachineEfficiencyStats() {
+            if (performanceData.length === 0) return;
+
+            // 计算总体效率指标
+            const totalAudioDuration = performanceData.reduce((sum, item) => sum + (item.audio_duration || 0), 0);
+            const totalTranscriptionTime = performanceData.reduce((sum, item) => sum + (item.transcription_time || 0), 0);
+            const transcriptionRatio = totalAudioDuration > 0 ? (totalTranscriptionTime / totalAudioDuration) : 0;
+
+            // 估算并发数（基于处理时间重叠）
+            const avgConcurrent = estimateAverageConcurrency();
+
+            // 计算吞吐量（每小时能处理多少小时的音频）
+            const throughput = transcriptionRatio > 0 ? (1 / transcriptionRatio) : 0;
+
+            // 统计机器数量
+            const uniqueMachines = [...new Set(performanceData.map(item => item.machine_name))].filter(name => name);
+
+            // 更新汇总指标
+            document.getElementById('transcriptionRatio').textContent = transcriptionRatio.toFixed(2) + 'x';
+            document.getElementById('avgConcurrent').textContent = avgConcurrent.toFixed(1);
+            document.getElementById('throughput').textContent = throughput.toFixed(1) + 'h';
+            document.getElementById('machineCount').textContent = uniqueMachines.length;
+
+            // 按机器维度统计
+            updateMachineStatsTable();
+        }
+
+        function estimateAverageConcurrency() {
+            // 简化的并发估算：基于任务时间重叠
+            if (performanceData.length < 2) return 1;
+            
+            // 按时间排序
+            const sortedData = performanceData.slice().sort((a, b) => 
+                new Date(a.created_at) - new Date(b.created_at)
+            );
+            
+            let totalOverlap = 0;
+            let overlapCount = 0;
+            
+            for (let i = 0; i < sortedData.length - 1; i++) {
+                const current = sortedData[i];
+                const next = sortedData[i + 1];
+                
+                const currentStart = new Date(current.created_at);
+                const currentEnd = new Date(currentStart.getTime() + (current.total_processing_time || 0) * 1000);
+                const nextStart = new Date(next.created_at);
+                
+                if (nextStart < currentEnd) {
+                    totalOverlap++;
+                }
+                overlapCount++;
+            }
+            
+            return overlapCount > 0 ? (totalOverlap / overlapCount) * 2 + 1 : 1;
+        }
+
+        function updateMachineStatsTable() {
+            const machineStats = {};
+            
+            // 按机器聚合数据
+            performanceData.forEach(item => {
+                const machineName = item.machine_name || 'Unknown';
+                if (!machineStats[machineName]) {
+                    machineStats[machineName] = {
+                        taskCount: 0,
+                        totalAudioDuration: 0,
+                        totalTranscriptionTime: 0,
+                        totalProcessingTime: 0,
+                        tasks: []
+                    };
+                }
+                
+                machineStats[machineName].taskCount++;
+                machineStats[machineName].totalAudioDuration += item.audio_duration || 0;
+                machineStats[machineName].totalTranscriptionTime += item.transcription_time || 0;
+                machineStats[machineName].totalProcessingTime += item.total_processing_time || 0;
+                machineStats[machineName].tasks.push(item);
+            });
+
+            // 渲染机器统计表格
+            const tableBody = document.getElementById('machineStatsTableBody');
+            tableBody.innerHTML = Object.entries(machineStats).map(([machineName, stats]) => {
+                const transcriptionRatio = stats.totalAudioDuration > 0 ? 
+                    (stats.totalTranscriptionTime / stats.totalAudioDuration) : 0;
+                const avgProcessingRatio = stats.totalAudioDuration > 0 ? 
+                    (stats.totalProcessingTime / stats.totalAudioDuration) : 0;
+                
+                const efficiencyLevel = getEfficiencyLevel(transcriptionRatio);
+                
+                return `
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
+                            <span class="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full">
+                                ${machineName}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                            ${stats.taskCount}
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                            ${formatDuration(stats.totalAudioDuration)}
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                            ${formatDuration(stats.totalTranscriptionTime)}
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm font-medium">
+                            <span class="px-2 py-1 text-xs rounded-full ${getEfficiencyRatioClass(transcriptionRatio)}">
+                                ${transcriptionRatio.toFixed(2)}x
+                            </span>
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm font-medium">
+                            <span class="px-2 py-1 text-xs rounded-full ${getRatioClass(avgProcessingRatio)}">
+                                ${avgProcessingRatio.toFixed(2)}x
+                            </span>
+                        </td>
+                        <td class="px-4 py-3 whitespace-nowrap text-sm font-medium">
+                            ${efficiencyLevel}
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function getEfficiencyLevel(ratio) {
+            if (ratio < 0.3) return '<span class="px-2 py-1 text-xs bg-green-100 text-green-800 rounded-full">🚀 极高</span>';
+            if (ratio < 0.5) return '<span class="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full">⚡ 高效</span>';
+            if (ratio < 0.8) return '<span class="px-2 py-1 text-xs bg-yellow-100 text-yellow-800 rounded-full">⚖️ 良好</span>';
+            if (ratio < 1.2) return '<span class="px-2 py-1 text-xs bg-orange-100 text-orange-800 rounded-full">⚠️ 一般</span>';
+            return '<span class="px-2 py-1 text-xs bg-red-100 text-red-800 rounded-full">🐌 需优化</span>';
+        }
+
+        function getEfficiencyRatioClass(ratio) {
+            if (ratio < 0.3) return 'bg-green-100 text-green-800';
+            if (ratio < 0.5) return 'bg-blue-100 text-blue-800';
+            if (ratio < 0.8) return 'bg-yellow-100 text-yellow-800';
+            if (ratio < 1.2) return 'bg-orange-100 text-orange-800';
+            return 'bg-red-100 text-red-800';
         }
 
         function updateCharts() {
-            if (performanceData.length === 0) return;
-
-            // 更新处理时间分布图
-            const avgTranscription = performanceData.reduce((sum, item) => sum + (item.transcription_time || 0), 0) / performanceData.length;
-            const avgSeparation = performanceData.reduce((sum, item) => sum + (item.speaker_separation_time || 0), 0) / performanceData.length;
-            const avgMatching = performanceData.reduce((sum, item) => sum + (item.speaker_matching_time || 0), 0) / performanceData.length;
-
-            processingTimeChart.data.datasets[0].data = [avgTranscription, avgSeparation, avgMatching];
-            processingTimeChart.update();
-
-            // 更新处理倍率趋势图（最近20条记录）
-            const recentData = performanceData.slice(0, 20).reverse();
-            const labels = recentData.map((item, index) => `任务${index + 1}`);
-            const ratios = recentData.map(item => 
-                item.audio_duration > 0 ? item.total_processing_time / item.audio_duration : 0
-            );
-
-            ratioTrendChart.data.labels = labels;
-            ratioTrendChart.data.datasets[0].data = ratios;
-            ratioTrendChart.update();
+            // 图表更新功能已移除
         }
 
         function getRatioClass(ratio) {
@@ -490,11 +580,6 @@
 
             const report = {
                 exportTime: new Date().toISOString(),
-                systemInfo: {
-                    machineName: document.getElementById('machineName').textContent,
-                    modelType: document.getElementById('modelType').textContent,
-                    deviceType: document.getElementById('deviceType').textContent
-                },
                 statistics: {
                     avgRatio: document.getElementById('avgRatio').textContent,
                     bestRatio: document.getElementById('bestRatio').textContent,

@@ -34,6 +34,14 @@ class SpeakerManager:
                     return pickle.load(f)
             except Exception as e:
                 print(f"⚠️ 加载嵌入向量失败: {e}")
+                # 如果是numpy兼容性问题，尝试重建数据库
+                if "numpy._core" in str(e) or "numpy.core" in str(e):
+                    print("🔄 检测到numpy兼容性问题，清理旧数据...")
+                    try:
+                        self.embeddings_file.unlink()  # 删除旧文件
+                        print("✅ 已清理旧的嵌入向量文件")
+                    except:
+                        pass
         return {}
     
     def _load_metadata(self):

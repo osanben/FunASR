@@ -122,6 +122,31 @@ class FunASRDatabase:
                 )
             ''')
             
+            # 系统负载监控表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS system_load_monitor (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    machine_name TEXT NOT NULL,
+                    cpu_usage REAL,
+                    memory_usage REAL,
+                    memory_total REAL,
+                    memory_available REAL,
+                    disk_usage REAL,
+                    disk_total REAL,
+                    disk_free REAL,
+                    io_read_bytes REAL,
+                    io_write_bytes REAL,
+                    network_sent_bytes REAL,
+                    network_recv_bytes REAL,
+                    concurrent_tasks INTEGER DEFAULT 0,
+                    max_concurrent_tasks INTEGER DEFAULT 0,
+                    load_average_1m REAL,
+                    load_average_5m REAL,
+                    load_average_15m REAL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
             conn.commit()
     
     def add_transcription_task(self, task_id, filename, file_size=None, model_type=None):
@@ -447,6 +472,118 @@ class FunASRDatabase:
                 'today_processing_time': today_stats[2] or 0
             }
 
+    def add_system_load(self, machine_name, cpu_usage=None, memory_usage=None, 
+                       memory_total=None, memory_available=None, disk_usage=None,
+                       disk_total=None, disk_free=None, io_read_bytes=None,
+                       io_write_bytes=None, network_sent_bytes=None, network_recv_bytes=None,
+                       concurrent_tasks=0, max_concurrent_tasks=0, load_average_1m=None,
+                       load_average_5m=None, load_average_15m=None):
+        """添加系统负载监控记录"""
+        with self.lock:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO system_load_monitor 
+                    (machine_name, cpu_usage, memory_usage, memory_total, memory_available,
+                     disk_usage, disk_total, disk_free, io_read_bytes, io_write_bytes,
+                     network_sent_bytes, network_recv_bytes, concurrent_tasks, max_concurrent_tasks,
+                     load_average_1m, load_average_5m, load_average_15m, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    machine_name, cpu_usage, memory_usage, memory_total, memory_available,
+                    disk_usage, disk_total, disk_free, io_read_bytes, io_write_bytes,
+                    network_sent_bytes, network_recv_bytes, concurrent_tasks, max_concurrent_tasks,
+                    load_average_1m, load_average_5m, load_average_15m, datetime.now()
+                ))
+                conn.commit()
+    
+    def get_system_loads(self, machine_name=None, limit=100, offset=0):
+        """获取系统负载监控数据"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            where_clause = ""
+            params = []
+            if machine_name:
+                where_clause = "WHERE machine_name = ?"
+                params.append(machine_name)
+            
+            cursor.execute(f'''
+                SELECT * FROM system_load_monitor 
+                {where_clause}
+                ORDER BY created_at DESC 
+                LIMIT ? OFFSET ?
+            ''', params + [limit, offset])
+            
+            columns = [desc[0] for desc in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    
+    def get_latest_system_load(self, machine_name):
+        """获取指定机器的最新系统负载"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM system_load_monitor 
+                WHERE machine_name = ?
+                ORDER BY created_at DESC 
+                LIMIT 1
+            ''', (machine_name,))
+            
+            row = cursor.fetchone()
+            if row:
+                columns = [desc[0] for desc in cursor.description]
+                return dict(zip(columns, row))
+            return None
+    
+    def get_machine_list(self):
+        """获取所有机器列表"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT DISTINCT machine_name, 
+                       MAX(created_at) as last_seen,
+                       COUNT(*) as record_count
+                FROM system_load_monitor 
+                GROUP BY machine_name
+                ORDER BY last_seen DESC
+            ''')
+            
+            columns = [desc[0] for desc in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    
+    def get_system_load_statistics(self, machine_name=None, hours=24):
+        """获取系统负载统计信息"""
+        cutoff_time = datetime.now() - timedelta(hours=hours)
+        
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            
+            where_clause = "WHERE created_at >= ?"
+            params = [cutoff_time]
+            if machine_name:
+                where_clause += " AND machine_name = ?"
+                params.append(machine_name)
+            
+            cursor.execute(f'''
+                SELECT 
+                    machine_name,
+                    AVG(cpu_usage) as avg_cpu,
+                    MAX(cpu_usage) as max_cpu,
+                    AVG(memory_usage) as avg_memory,
+                    MAX(memory_usage) as max_memory,
+                    AVG(concurrent_tasks) as avg_concurrent,
+                    MAX(concurrent_tasks) as max_concurrent,
+                    MAX(max_concurrent_tasks) as peak_concurrent,
+                    COUNT(*) as sample_count
+                FROM system_load_monitor 
+                {where_clause}
+                GROUP BY machine_name
+                ORDER BY machine_name
+            ''', params)
+            
+            columns = [desc[0] for desc in cursor.description]
+            return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
     def cleanup_old_data(self, days=30):
         """清理旧数据"""
         with self.lock:
@@ -462,6 +599,10 @@ class FunASRDatabase:
                 '''.format(days))
                 cursor.execute('''
                     DELETE FROM performance_reports 
+                    WHERE created_at < datetime('now', '-{} days')
+                '''.format(days))
+                cursor.execute('''
+                    DELETE FROM system_load_monitor 
                     WHERE created_at < datetime('now', '-{} days')
                 '''.format(days))
                 conn.commit() 

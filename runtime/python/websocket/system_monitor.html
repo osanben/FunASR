@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>系统负载监控 - FunASR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .status-normal { background-color: #10b981; }
+        .status-warning { background-color: #f59e0b; }
+        .status-danger { background-color: #ef4444; }
+        
+        .progress-bar {
+            transition: width 0.3s ease;
+        }
+        
+        .metric-card {
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .metric-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div class="flex min-h-screen">
+        <!-- 左侧导航 -->
+        <nav class="w-64 bg-white shadow-lg">
+            <div class="p-6">
+                <h1 class="text-xl font-bold text-gray-800">FunASR 控制台</h1>
+            </div>
+            <ul class="space-y-2 px-4">
+                <li><a href="/dashboard" class="block px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">📊 控制台概览</a></li>
+                <li><a href="/dashboard#upload" class="block px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">🎵 音频上传</a></li>
+                <li><a href="/batch_processing" class="block px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">📁 批量处理</a></li>
+                <li><a href="/transcription_history" class="block px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">📝 转录历史</a></li>
+                <li><a href="/dashboard#speakers" class="block px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">👥 说话人管理</a></li>
+                <li><a href="/performance_report" class="block px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">📈 性能报告</a></li>
+                <li><a href="/system_monitor" class="block px-4 py-2 text-white bg-blue-600 hover:bg-blue-700 rounded">🖥️ 系统监控</a></li>
+            </ul>
+        </nav>
+
+        <!-- 主内容区域 -->
+        <main class="flex-1 p-8">
+            <div class="max-w-7xl mx-auto">
+                <!-- 页面标题 -->
+                <div class="mb-8">
+                    <h1 class="text-3xl font-bold text-gray-900">系统负载监控</h1>
+                    <p class="text-gray-600 mt-2">实时监控系统性能和并发转录能力</p>
+                </div>
+
+                <!-- 机器选择器 -->
+                <div class="mb-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">选择机器：</label>
+                    <select id="machineSelector" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="">所有机器</option>
+                    </select>
+                    <button id="refreshBtn" class="ml-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                        🔄 刷新
+                    </button>
+                </div>
+
+                <!-- 实时状态卡片 -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                    <!-- CPU使用率 -->
+                    <div class="metric-card bg-white p-6 rounded-lg shadow">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-lg font-medium text-gray-900">CPU使用率</h3>
+                            <span id="cpuStatus" class="status-indicator status-normal"></span>
+                        </div>
+                        <div class="text-3xl font-bold text-blue-600 mb-2" id="cpuUsage">0%</div>
+                        <div class="w-full bg-gray-200 rounded-full h-2">
+                            <div id="cpuProgress" class="progress-bar bg-blue-600 h-2 rounded-full" style="width: 0%"></div>
+                        </div>
+                        <p class="text-sm text-gray-500 mt-2" id="cpuLevel">负载等级: 低</p>
+                    </div>
+
+                    <!-- 内存使用率 -->
+                    <div class="metric-card bg-white p-6 rounded-lg shadow">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-lg font-medium text-gray-900">内存使用率</h3>
+                            <span id="memoryStatus" class="status-indicator status-normal"></span>
+                        </div>
+                        <div class="text-3xl font-bold text-green-600 mb-2" id="memoryUsage">0%</div>
+                        <div class="w-full bg-gray-200 rounded-full h-2">
+                            <div id="memoryProgress" class="progress-bar bg-green-600 h-2 rounded-full" style="width: 0%"></div>
+                        </div>
+                        <p class="text-sm text-gray-500 mt-2" id="memoryInfo">可用: 0GB / 0GB</p>
+                    </div>
+
+                    <!-- 并发转录数 -->
+                    <div class="metric-card bg-white p-6 rounded-lg shadow">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-lg font-medium text-gray-900">当前并发</h3>
+                            <span id="concurrentStatus" class="status-indicator status-normal"></span>
+                        </div>
+                        <div class="text-3xl font-bold text-purple-600 mb-2" id="concurrentTasks">0</div>
+                        <div class="w-full bg-gray-200 rounded-full h-2">
+                            <div id="concurrentProgress" class="progress-bar bg-purple-600 h-2 rounded-full" style="width: 0%"></div>
+                        </div>
+                        <p class="text-sm text-gray-500 mt-2" id="concurrentInfo">峰值: 0 / 估算容量: 0</p>
+                    </div>
+
+                    <!-- 磁盘使用率 -->
+                    <div class="metric-card bg-white p-6 rounded-lg shadow">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-lg font-medium text-gray-900">磁盘使用率</h3>
+                            <span id="diskStatus" class="status-indicator status-normal"></span>
+                        </div>
+                        <div class="text-3xl font-bold text-orange-600 mb-2" id="diskUsage">0%</div>
+                        <div class="w-full bg-gray-200 rounded-full h-2">
+                            <div id="diskProgress" class="progress-bar bg-orange-600 h-2 rounded-full" style="width: 0%"></div>
+                        </div>
+                        <p class="text-sm text-gray-500 mt-2" id="diskInfo">可用: 0GB / 0GB</p>
+                    </div>
+                </div>
+
+                <!-- 机器列表 -->
+                <div class="bg-white rounded-lg shadow mb-8">
+                    <div class="px-6 py-4 border-b border-gray-200">
+                        <h2 class="text-xl font-semibold text-gray-900">机器状态列表</h2>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">机器名称</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">CPU</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">内存</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">并发数</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">估算容量</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">最后更新</th>
+                                </tr>
+                            </thead>
+                            <tbody id="machineList" class="bg-white divide-y divide-gray-200">
+                                <!-- 机器列表将在这里动态生成 -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- 性能图表 -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <!-- CPU和内存趋势图 -->
+                    <div class="bg-white p-6 rounded-lg shadow">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">CPU & 内存趋势</h3>
+                        <canvas id="cpuMemoryChart" width="400" height="200"></canvas>
+                    </div>
+
+                    <!-- 并发任务趋势图 -->
+                    <div class="bg-white p-6 rounded-lg shadow">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">并发任务趋势</h3>
+                        <canvas id="concurrentChart" width="400" height="200"></canvas>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        let cpuMemoryChart, concurrentChart;
+        let currentMachine = '';
+        let updateInterval;
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            initCharts();
+            loadMachineList();
+            updateSystemLoad();
+            
+            // 设置自动刷新
+            updateInterval = setInterval(updateSystemLoad, 30000); // 30秒刷新一次
+            
+            // 绑定事件
+            document.getElementById('machineSelector').addEventListener('change', function() {
+                currentMachine = this.value;
+                updateSystemLoad();
+            });
+            
+            document.getElementById('refreshBtn').addEventListener('click', function() {
+                updateSystemLoad();
+                loadMachineList();
+            });
+        });
+
+        // 初始化图表
+        function initCharts() {
+            const ctx1 = document.getElementById('cpuMemoryChart').getContext('2d');
+            cpuMemoryChart = new Chart(ctx1, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'CPU使用率 (%)',
+                        data: [],
+                        borderColor: 'rgb(59, 130, 246)',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        tension: 0.1
+                    }, {
+                        label: '内存使用率 (%)',
+                        data: [],
+                        borderColor: 'rgb(16, 185, 129)',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    }
+                }
+            });
+
+            const ctx2 = document.getElementById('concurrentChart').getContext('2d');
+            concurrentChart = new Chart(ctx2, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '当前并发数',
+                        data: [],
+                        borderColor: 'rgb(147, 51, 234)',
+                        backgroundColor: 'rgba(147, 51, 234, 0.1)',
+                        tension: 0.1
+                    }, {
+                        label: '峰值并发数',
+                        data: [],
+                        borderColor: 'rgb(239, 68, 68)',
+                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        // 加载机器列表
+        async function loadMachineList() {
+            try {
+                const response = await fetch('/api/machine_list');
+                const machines = await response.json();
+                
+                const selector = document.getElementById('machineSelector');
+                const currentValue = selector.value;
+                
+                // 清空并重新填充选项
+                selector.innerHTML = '<option value="">所有机器</option>';
+                
+                machines.forEach(machine => {
+                    const option = document.createElement('option');
+                    option.value = machine.machine_name;
+                    option.textContent = `${machine.machine_name} (${machine.record_count}条记录)`;
+                    selector.appendChild(option);
+                });
+                
+                // 恢复选择
+                selector.value = currentValue;
+                
+            } catch (error) {
+                console.error('加载机器列表失败:', error);
+            }
+        }
+
+        // 更新系统负载
+        async function updateSystemLoad() {
+            try {
+                // 获取当前负载
+                const currentResponse = await fetch('/api/system_load_current' + (currentMachine ? `?machine=${encodeURIComponent(currentMachine)}` : ''));
+                const currentLoad = await currentResponse.json();
+                
+                // 更新实时状态卡片
+                updateCurrentLoadCards(currentLoad);
+                
+                // 获取历史数据用于图表
+                const historyResponse = await fetch('/api/system_load_history' + (currentMachine ? `?machine=${encodeURIComponent(currentMachine)}` : '') + '&limit=20');
+                const historyData = await historyResponse.json();
+                
+                // 更新图表
+                updateCharts(historyData);
+                
+                // 获取机器统计
+                const statsResponse = await fetch('/api/system_load_statistics');
+                const stats = await statsResponse.json();
+                
+                // 更新机器列表
+                updateMachineList(stats);
+                
+            } catch (error) {
+                console.error('更新系统负载失败:', error);
+            }
+        }
+
+        // 更新实时状态卡片
+        function updateCurrentLoadCards(data) {
+            if (!data || data.length === 0) {
+                return;
+            }
+            
+            const latest = data[0];
+            
+            // CPU
+            const cpuUsage = latest.cpu_usage || 0;
+            document.getElementById('cpuUsage').textContent = `${cpuUsage.toFixed(1)}%`;
+            document.getElementById('cpuProgress').style.width = `${cpuUsage}%`;
+            document.getElementById('cpuLevel').textContent = `负载等级: ${cpuUsage < 50 ? '低' : cpuUsage < 80 ? '中' : '高'}`;
+            document.getElementById('cpuStatus').className = `status-indicator ${cpuUsage < 50 ? 'status-normal' : cpuUsage < 80 ? 'status-warning' : 'status-danger'}`;
+            
+            // 内存
+            const memoryUsage = latest.memory_usage || 0;
+            const memoryTotal = latest.memory_total || 0;
+            const memoryAvailable = latest.memory_available || 0;
+            document.getElementById('memoryUsage').textContent = `${memoryUsage.toFixed(1)}%`;
+            document.getElementById('memoryProgress').style.width = `${memoryUsage}%`;
+            document.getElementById('memoryInfo').textContent = `可用: ${memoryAvailable.toFixed(1)}GB / ${memoryTotal.toFixed(1)}GB`;
+            document.getElementById('memoryStatus').className = `status-indicator ${memoryUsage < 60 ? 'status-normal' : memoryUsage < 85 ? 'status-warning' : 'status-danger'}`;
+            
+            // 并发任务
+            const concurrent = latest.concurrent_tasks || 0;
+            const maxConcurrent = latest.max_concurrent_tasks || 0;
+            const estimatedCapacity = Math.max(1, Math.min(
+                Math.floor((100 - cpuUsage) / 20),
+                Math.floor((100 - memoryUsage) / 15)
+            ));
+            document.getElementById('concurrentTasks').textContent = concurrent;
+            document.getElementById('concurrentProgress').style.width = `${Math.min(100, (concurrent / Math.max(1, estimatedCapacity)) * 100)}%`;
+            document.getElementById('concurrentInfo').textContent = `峰值: ${maxConcurrent} / 估算容量: ${estimatedCapacity}`;
+            document.getElementById('concurrentStatus').className = `status-indicator ${concurrent < estimatedCapacity * 0.7 ? 'status-normal' : concurrent < estimatedCapacity ? 'status-warning' : 'status-danger'}`;
+            
+            // 磁盘
+            const diskUsage = latest.disk_usage || 0;
+            const diskTotal = latest.disk_total || 0;
+            const diskFree = latest.disk_free || 0;
+            document.getElementById('diskUsage').textContent = `${diskUsage.toFixed(1)}%`;
+            document.getElementById('diskProgress').style.width = `${diskUsage}%`;
+            document.getElementById('diskInfo').textContent = `可用: ${diskFree.toFixed(1)}GB / ${diskTotal.toFixed(1)}GB`;
+            document.getElementById('diskStatus').className = `status-indicator ${diskUsage < 70 ? 'status-normal' : diskUsage < 90 ? 'status-warning' : 'status-danger'}`;
+        }
+
+        // 更新图表
+        function updateCharts(data) {
+            if (!data || data.length === 0) return;
+            
+            // 反转数据顺序（最新的在右边）
+            data.reverse();
+            
+            const labels = data.map(item => {
+                const date = new Date(item.created_at);
+                return date.toLocaleTimeString();
+            });
+            
+            // 更新CPU和内存图表
+            cpuMemoryChart.data.labels = labels;
+            cpuMemoryChart.data.datasets[0].data = data.map(item => item.cpu_usage || 0);
+            cpuMemoryChart.data.datasets[1].data = data.map(item => item.memory_usage || 0);
+            cpuMemoryChart.update();
+            
+            // 更新并发任务图表
+            concurrentChart.data.labels = labels;
+            concurrentChart.data.datasets[0].data = data.map(item => item.concurrent_tasks || 0);
+            concurrentChart.data.datasets[1].data = data.map(item => item.max_concurrent_tasks || 0);
+            concurrentChart.update();
+        }
+
+        // 更新机器列表
+        function updateMachineList(stats) {
+            const tbody = document.getElementById('machineList');
+            tbody.innerHTML = '';
+            
+            stats.forEach(stat => {
+                const row = document.createElement('tr');
+                row.className = 'hover:bg-gray-50';
+                
+                const status = (stat.avg_cpu < 80 && stat.avg_memory < 85) ? '正常' : '高负载';
+                const statusClass = status === '正常' ? 'status-normal' : 'status-danger';
+                const estimatedCapacity = Math.max(1, Math.min(
+                    Math.floor((100 - stat.avg_cpu) / 20),
+                    Math.floor((100 - stat.avg_memory) / 15)
+                ));
+                
+                row.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${stat.machine_name}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <span class="status-indicator ${statusClass}"></span>${status}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${stat.avg_cpu ? stat.avg_cpu.toFixed(1) : 0}%</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${stat.avg_memory ? stat.avg_memory.toFixed(1) : 0}%</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${stat.avg_concurrent ? stat.avg_concurrent.toFixed(1) : 0} / ${stat.max_concurrent || 0}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${estimatedCapacity}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${stat.sample_count}个样本</td>
+                `;
+                
+                tbody.appendChild(row);
+            });
+        }
+
+        // 页面卸载时清理定时器
+        window.addEventListener('beforeunload', function() {
+            if (updateInterval) {
+                clearInterval(updateInterval);
+            }
+        });
+    </script>
+</body>
+</html> 

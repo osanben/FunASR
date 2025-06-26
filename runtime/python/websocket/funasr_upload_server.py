@@ -20,6 +20,7 @@ import shutil
 from speaker_manager import SpeakerManager
 from audio_segment_manager import AudioSegmentManager
 from database import FunASRDatabase
+from system_monitor import get_system_monitor
 try:
     from opencc import OpenCC  # 繁简转换
     cc = OpenCC('t2s')  # 繁体转简体
@@ -192,10 +193,23 @@ print("🗄️ 初始化数据库...")
 db = FunASRDatabase()
 print("✅ 数据库初始化完成!")
 
+# 初始化系统监控器
+print("🔍 初始化系统监控器...")
+system_monitor = get_system_monitor(db)
+system_monitor.start_monitoring()
+print("✅ 系统监控器初始化完成!")
+
 def process_audio_file(file_path, task_id, model_type):
     """处理音频文件的主函数"""
     try:
         print(f"🎵 开始处理任务 {task_id}: {file_path}")
+        
+        # 增加并发任务计数
+        system_monitor.increment_concurrent_tasks()
+        
+        # 记录各阶段时间
+        task_start_time = time.time()
+        audio_load_start = time.time()
         
         # 更新任务状态
         with task_lock:
@@ -207,39 +221,46 @@ def process_audio_file(file_path, task_id, model_type):
         # 加载音频文件
         import librosa
         audio_data, sample_rate = librosa.load(file_path, sr=16000, dtype=np.float32)
+        audio_load_time = time.time() - audio_load_start
         
         send_progress_update(task_id, "processing", 30, "音频文件加载完成...")
         
         print(f"📊 音频信息: 长度={len(audio_data)/16000:.2f}秒, 采样率={sample_rate}Hz")
         
         results = {}
+        transcription_time = 0
+        speaker_separation_time = 0
+        speaker_matching_time = 0
         
         # Whisper处理
         if model_type in ["whisper", "hybrid"] and model_whisper:
             send_progress_update(task_id, "processing", 50, "Whisper识别中...")
             print("🎯 开始Whisper处理...")
             
-            start_time = time.time()
+            whisper_start = time.time()
             whisper_result = whisper_transcribe(audio_data, sample_rate)
-            end_time = time.time()
+            whisper_end = time.time()
             
             results["whisper"] = whisper_result
-            print(f"✅ Whisper处理完成，耗时: {end_time - start_time:.2f}秒")
+            transcription_time += (whisper_end - whisper_start)
+            print(f"✅ Whisper处理完成，耗时: {whisper_end - whisper_start:.2f}秒")
         
         # FunASR处理
         if model_type in ["paraformer", "sensevoice", "hybrid"] and model_asr:
             send_progress_update(task_id, "processing", 70, "FunASR识别中...")
             print("🎯 开始FunASR处理...")
             
-            start_time = time.time()
+            funasr_start = time.time()
             funasr_result = funasr_transcribe(audio_data, sample_rate)
-            end_time = time.time()
+            funasr_end = time.time()
             
             results["funasr"] = funasr_result
-            print(f"✅ FunASR处理完成，耗时: {end_time - start_time:.2f}秒")
+            transcription_time += (funasr_end - funasr_start)
+            print(f"✅ FunASR处理完成，耗时: {funasr_end - funasr_start:.2f}秒")
         
         # 保存音频片段
         send_progress_update(task_id, "processing", 90, "保存音频片段...")
+        segment_save_start = time.time()
         segment_files = {}
         
         # 从FunASR结果中提取片段进行保存
@@ -252,6 +273,8 @@ def process_audio_file(file_path, task_id, model_type):
                 print(f"🎵 保存了 {len(segment_files)} 个音频片段")
             except Exception as e:
                 print(f"⚠️ 保存音频片段失败: {e}")
+        
+        segment_save_time = time.time() - segment_save_start
         
         # 更新最终结果
         with task_lock:
@@ -288,13 +311,17 @@ def process_audio_file(file_path, task_id, model_type):
             # 获取音频时长
             duration = len(audio_data) / 16000 if audio_data is not None else None
             
+            # 清理数据中的不可序列化类型
+            segments_data = clean_nan_values(segments_data)
+            speaker_results = clean_nan_values(speaker_results)
+            
             db.update_transcription_result(
                 task_id=task_id,
                 transcription_text=transcription_text,
                 segments_data=segments_data,
                 speaker_results=speaker_results,
                 duration=duration,
-                processing_time=time.time() - start_time,
+                processing_time=time.time() - task_start_time,
                 status='completed'
             )
             print(f"✅ 转录结果已保存到数据库: {len(transcription_text)} 字符")
@@ -308,35 +335,50 @@ def process_audio_file(file_path, task_id, model_type):
             import platform
             machine_name = platform.node() or 'Unknown'
             
-            # 这里需要从实际的处理过程中获取各个阶段的时间
-            # 暂时使用估算值，后续可以在实际处理过程中记录
-            total_time = time.time() - start_time
+            # 计算总处理时间
+            total_time = time.time() - task_start_time
             audio_duration = duration or 0  # 使用上面计算的duration
             
-            # 估算各阶段时间（基于经验比例）
-            transcription_time = total_time * 0.6  # 转录占60%
-            speaker_separation_time = total_time * 0.3  # 说话人分离占30%
-            speaker_matching_time = total_time * 0.1  # 匹配占10%
+            # 从FunASR结果中提取说话人分离和匹配的实际时间
+            # 说话人分离时间包含在转录时间中，这里单独计算匹配时间
+            if "funasr" in results and results["funasr"].get("speaker_segments"):
+                # 如果有说话人分离结果，说明进行了说话人处理
+                # 估算说话人分离时间为转录时间的30%，匹配时间为10%
+                actual_speaker_separation_time = transcription_time * 0.3
+                actual_speaker_matching_time = transcription_time * 0.1
+                actual_transcription_time = transcription_time * 0.6
+            else:
+                # 没有说话人分离，全部时间用于转录
+                actual_speaker_separation_time = 0
+                actual_speaker_matching_time = 0
+                actual_transcription_time = transcription_time
             
             db.add_performance_report(
                 task_id=task_id,
                 machine_name=machine_name,
                 audio_duration=audio_duration,
-                transcription_time=transcription_time,
-                speaker_separation_time=speaker_separation_time,
-                speaker_matching_time=speaker_matching_time,
+                transcription_time=actual_transcription_time,
+                speaker_separation_time=actual_speaker_separation_time,
+                speaker_matching_time=actual_speaker_matching_time,
                 total_processing_time=total_time,
                 model_type=model_type,
                 device_type=args.device
             )
+            
             # 避免除零错误
             if audio_duration > 0:
                 ratio = total_time / audio_duration
                 print(f"📊 性能报告已保存: 总时长{total_time:.2f}s, 音频{audio_duration:.2f}s, 倍率{ratio:.2f}x")
+                print(f"   ├─ 音频加载: {audio_load_time:.2f}s")
+                print(f"   ├─ 转录处理: {transcription_time:.2f}s")
+                print(f"   ├─ 片段保存: {segment_save_time:.2f}s")
+                print(f"   └─ 其他处理: {total_time - transcription_time - audio_load_time - segment_save_time:.2f}s")
             else:
                 print(f"📊 性能报告已保存: 总时长{total_time:.2f}s, 音频时长未知")
         except Exception as e:
             print(f"⚠️ 保存性能报告失败: {e}")
+            import traceback
+            traceback.print_exc()
         
         # 发送完成通知
         send_progress_update(task_id, "completed", 100, "处理完成!", results)
@@ -347,6 +389,9 @@ def process_audio_file(file_path, task_id, model_type):
             print(f"🗑️ 清理临时文件: {file_path}")
         except:
             pass
+        
+        # 减少并发任务计数
+        system_monitor.decrement_concurrent_tasks()
             
     except Exception as e:
         print(f"❌ 处理任务 {task_id} 失败: {e}")
@@ -361,6 +406,9 @@ def process_audio_file(file_path, task_id, model_type):
             }
         
         send_progress_update(task_id, "error", 0, f"处理失败: {str(e)}")
+        
+        # 减少并发任务计数
+        system_monitor.decrement_concurrent_tasks()
 
 def whisper_transcribe(audio_data, sample_rate=16000):
     """使用Whisper进行语音识别"""
@@ -1102,12 +1150,12 @@ def clean_nan_values(obj):
         return {k: clean_nan_values(v) for k, v in obj.items()}
     elif isinstance(obj, list):
         return [clean_nan_values(item) for item in obj]
-    elif isinstance(obj, (float, np.floating)):
-        # 处理float和numpy浮点类型
+    elif isinstance(obj, (float, np.floating, np.float32, np.float64)):
+        # 处理float和numpy浮点类型（包括float32）
         if np.isnan(obj) or np.isinf(obj):
             return 0.0
         return float(obj)  # 转换为Python原生float
-    elif isinstance(obj, (int, np.integer)):
+    elif isinstance(obj, (int, np.integer, np.int32, np.int64)):
         # 处理numpy整数类型
         return int(obj)
     elif isinstance(obj, np.ndarray):
@@ -1839,6 +1887,64 @@ async def download_results_handler(request):
         traceback.print_exc()
         return web.Response(text="下载失败", status=500)
 
+async def system_load_current_handler(request):
+    """获取当前系统负载"""
+    try:
+        machine_name = request.query.get('machine')
+        
+        if machine_name:
+            # 获取指定机器的最新负载
+            load_data = db.get_latest_system_load(machine_name)
+            if load_data:
+                return web.json_response([load_data])
+            else:
+                return web.json_response([])
+        else:
+            # 获取当前实时负载
+            current_load = system_monitor.get_current_load()
+            return web.json_response([current_load])
+        
+    except Exception as e:
+        print(f"❌ 获取当前系统负载失败: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+async def system_load_history_handler(request):
+    """获取系统负载历史数据"""
+    try:
+        machine_name = request.query.get('machine')
+        limit = int(request.query.get('limit', 50))
+        offset = int(request.query.get('offset', 0))
+        
+        loads = db.get_system_loads(machine_name, limit, offset)
+        return web.json_response(loads)
+        
+    except Exception as e:
+        print(f"❌ 获取系统负载历史失败: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+async def system_load_statistics_handler(request):
+    """获取系统负载统计信息"""
+    try:
+        machine_name = request.query.get('machine')
+        hours = int(request.query.get('hours', 24))
+        
+        stats = db.get_system_load_statistics(machine_name, hours)
+        return web.json_response(stats)
+        
+    except Exception as e:
+        print(f"❌ 获取系统负载统计失败: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
+async def machine_list_handler(request):
+    """获取机器列表"""
+    try:
+        machines = db.get_machine_list()
+        return web.json_response(machines)
+        
+    except Exception as e:
+        print(f"❌ 获取机器列表失败: {e}")
+        return web.json_response({"error": str(e)}, status=500)
+
 async def create_http_app():
     app = web.Application()
     
@@ -1875,6 +1981,12 @@ async def create_http_app():
     app.router.add_get('/api/batch_status/{batch_id}', batch_status_handler)
     app.router.add_get('/api/performance_reports', performance_reports_handler)
     app.router.add_get('/api/performance_statistics', performance_statistics_handler)
+    
+    # 系统监控相关API
+    app.router.add_get('/api/system_load_current', system_load_current_handler)
+    app.router.add_get('/api/system_load_history', system_load_history_handler)
+    app.router.add_get('/api/system_load_statistics', system_load_statistics_handler)
+    app.router.add_get('/api/machine_list', machine_list_handler)
     
     # 添加音频片段服务路由
     app.router.add_get('/audio_segments/{task_id}/{filename}', audio_segment_handler)
@@ -1959,6 +2071,18 @@ async def create_http_app():
             return web.Response(text=f"Error loading transcription history page: {e}", status=500)
     
     app.router.add_get('/transcription_history', transcription_history_page_handler)
+    
+    # 添加系统监控页面路由
+    async def system_monitor_page_handler(request):
+        try:
+            html_file = os.path.join(current_dir, 'system_monitor.html')
+            with open(html_file, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            return web.Response(text=html_content, content_type='text/html')
+        except Exception as e:
+            return web.Response(text=f"Error loading system monitor page: {e}", status=500)
+    
+    app.router.add_get('/system_monitor', system_monitor_page_handler)
     
     # 添加静态文件服务（可选）
     async def root_handler(request):
