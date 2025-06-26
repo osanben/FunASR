@@ -1350,22 +1350,53 @@ def funasr_transcribe(audio_data, sample_rate=16000):
         
         print(f"🚀 高性能FunASR配置: 音频时长={audio_duration:.1f}s, 批处理={batch_size_s}s, 合并长度={merge_length_s}s")
         
-        # FunASR高性能识别
-        res = model_asr.generate(
-            input=audio_data,
-            cache={},
-            language="auto",
-            use_itn=True,
-            batch_size_s=batch_size_s,  # 动态批处理大小
-            merge_vad=True,
-            merge_length_s=merge_length_s,  # 动态合并长度
-            return_spk_res=False,  # 🎯 关闭说话人识别，直接使用专业模型
-            return_spk_embedding=False,  # 不返回说话人嵌入向量
-            batch_size=gpu_batch_size,  # 🚀 使用动态GPU批处理大小
-            # 高性能优化参数
-            hotword="",  # 不使用热词，加快速度
-            ncpu=1,  # 单CPU处理，避免线程冲突
-        )
+        # FunASR高性能识别 - 修复VAD缓存状态问题
+        try:
+            # 🔧 使用独立的缓存对象，避免多线程冲突
+            import copy
+            cache_state = {}
+            
+            res = model_asr.generate(
+                input=audio_data,
+                cache=cache_state,  # 使用独立的缓存状态
+                language="auto",
+                use_itn=True,
+                batch_size_s=batch_size_s,  # 动态批处理大小
+                merge_vad=True,
+                merge_length_s=merge_length_s,  # 动态合并长度
+                return_spk_res=False,  # 🎯 关闭说话人识别，直接使用专业模型
+                return_spk_embedding=False,  # 不返回说话人嵌入向量
+                batch_size=gpu_batch_size,  # 🚀 使用动态GPU批处理大小
+                # 高性能优化参数
+                hotword="",  # 不使用热词，加快速度
+                ncpu=1,  # 单CPU处理，避免线程冲突
+                # 🔧 VAD稳定性参数
+                disable_pbar=True,  # 禁用进度条，避免多线程输出冲突
+                disable_log=True,   # 禁用日志输出
+            )
+        except Exception as vad_error:
+            print(f"⚠️ VAD处理失败，尝试无状态模式: {vad_error}")
+            # 回退到无状态模式
+            try:
+                res = model_asr.generate(
+                    input=audio_data,
+                    cache=None,  # 不使用缓存，无状态处理
+                    language="auto",
+                    use_itn=True,
+                    batch_size_s=batch_size_s,
+                    merge_vad=False,  # 禁用VAD合并，避免状态问题
+                    return_spk_res=False,
+                    return_spk_embedding=False,
+                    batch_size=gpu_batch_size,
+                    hotword="",
+                    ncpu=1,
+                    disable_pbar=True,
+                    disable_log=True,
+                )
+                print("✅ 无状态模式处理成功")
+            except Exception as fallback_error:
+                print(f"❌ 无状态模式也失败: {fallback_error}")
+                raise fallback_error
         
         if res and len(res) > 0:
             result = res[0]
@@ -1534,14 +1565,31 @@ def funasr_transcribe_chunked_parallel(audio_data, sample_rate=16000, task_id=No
         
         print(f"🚀 创建了 {len(chunks)} 个音频段，每段约 {chunk_duration}秒")
         
-        # 并行处理函数
+        # 并行处理函数 - 增强错误处理和线程安全
         def process_chunk(chunk_data):
             chunk_audio, info = chunk_data
             try:
                 print(f"🔄 处理段 {info['index']}: {info['start_time']:.1f}s - {info['end_time']:.1f}s")
                 
-                # 对单个段进行转录
-                result = funasr_transcribe(chunk_audio, sample_rate)
+                # 🔧 添加线程安全措施
+                import threading
+                thread_id = threading.current_thread().ident
+                print(f"🧵 线程 {thread_id} 处理段 {info['index']}")
+                
+                # 对单个段进行转录，增加重试机制
+                max_retries = 2
+                for retry in range(max_retries + 1):
+                    try:
+                        result = funasr_transcribe(chunk_audio, sample_rate)
+                        break
+                    except Exception as retry_error:
+                        if retry < max_retries:
+                            print(f"⚠️ 段 {info['index']} 重试 {retry + 1}/{max_retries}: {retry_error}")
+                            import time
+                            time.sleep(1)  # 短暂等待后重试
+                            continue
+                        else:
+                            raise retry_error
                 
                 # 调整时间戳
                 if result and 'speaker_segments' in result:
@@ -1549,12 +1597,21 @@ def funasr_transcribe_chunked_parallel(audio_data, sample_rate=16000, task_id=No
                         segment['start'] += info['start_time']
                         segment['end'] += info['start_time']
                 
-                print(f"✅ 段 {info['index']} 处理完成")
+                print(f"✅ 段 {info['index']} 处理完成 (线程 {thread_id})")
                 return info['index'], result
                 
             except Exception as e:
                 print(f"❌ 段 {info['index']} 处理失败: {e}")
-                return info['index'], None
+                import traceback
+                print(f"📋 错误详情: {traceback.format_exc()}")
+                # 返回空结果而不是None，保持处理连续性
+                return info['index'], {
+                    "text": "",
+                    "timestamp": "",
+                    "language": "zh",
+                    "result": {},
+                    "speaker_segments": []
+                }
         
         # 并行执行
         results_dict = {}
@@ -1586,27 +1643,39 @@ def funasr_transcribe_chunked_parallel(audio_data, sample_rate=16000, task_id=No
                 
                 print(f"📊 并行进度: {completed}/{len(chunks)}")
         
-        # 合并结果
+        # 合并结果 - 改进错误处理
         print("🔗 合并并行处理结果...")
         merged_text = ""
         merged_segments = []
         merged_timestamp = ""
+        successful_chunks = 0
+        failed_chunks = 0
         
         for i in range(len(chunks)):
             if i in results_dict and results_dict[i]:
                 result = results_dict[i]
                 
-                # 合并文本
-                if result.get('text'):
-                    merged_text += result['text'] + " "
-                
-                # 合并说话人片段
-                if result.get('speaker_segments'):
-                    merged_segments.extend(result['speaker_segments'])
-                
-                # 合并时间戳
-                if result.get('timestamp'):
-                    merged_timestamp += result['timestamp'] + " "
+                # 检查结果是否有效
+                if result.get('text') or result.get('speaker_segments'):
+                    successful_chunks += 1
+                    
+                    # 合并文本
+                    if result.get('text'):
+                        merged_text += result['text'] + " "
+                    
+                    # 合并说话人片段
+                    if result.get('speaker_segments'):
+                        merged_segments.extend(result['speaker_segments'])
+                    
+                    # 合并时间戳
+                    if result.get('timestamp'):
+                        merged_timestamp += result['timestamp'] + " "
+                else:
+                    failed_chunks += 1
+                    print(f"⚠️ 段 {i} 结果为空，跳过")
+            else:
+                failed_chunks += 1
+                print(f"⚠️ 段 {i} 处理失败，跳过")
         
         # 去重和排序说话人片段
         if merged_segments:
@@ -1630,13 +1699,28 @@ def funasr_transcribe_chunked_parallel(audio_data, sample_rate=16000, task_id=No
             
             merged_segments = deduped_segments
         
-        print(f"✅ 并行处理合并完成: 文本长度 {len(merged_text)}, 片段数 {len(merged_segments)}")
+        # 输出处理统计
+        total_chunks = len(chunks)
+        success_rate = (successful_chunks / total_chunks) * 100 if total_chunks > 0 else 0
+        
+        print(f"✅ 并行处理合并完成:")
+        print(f"   📊 成功段数: {successful_chunks}/{total_chunks} ({success_rate:.1f}%)")
+        print(f"   📝 文本长度: {len(merged_text)} 字符")
+        print(f"   🎤 片段数: {len(merged_segments)} 个")
+        
+        if failed_chunks > 0:
+            print(f"   ⚠️ 失败段数: {failed_chunks} 个")
         
         return {
             "text": merged_text.strip(),
             "timestamp": merged_timestamp.strip(),
             "language": "zh",
-            "result": {"parallel_chunks": len(chunks)},
+            "result": {
+                "parallel_chunks": total_chunks,
+                "successful_chunks": successful_chunks,
+                "failed_chunks": failed_chunks,
+                "success_rate": success_rate
+            },
             "speaker_segments": merged_segments
         }
         
@@ -1696,16 +1780,36 @@ def funasr_transcribe_pipeline(audio_data, sample_rate=16000, task_id=None):
         
         print(f"🚀 创建流水线: {segment_index} 个段，{gpu_batch_size} 个worker")
         
-        # Worker函数
+        # Worker函数 - 增强错误处理
         def pipeline_worker():
+            import threading
+            thread_id = threading.current_thread().ident
+            print(f"🧵 流水线线程 {thread_id} 启动")
+            
             while True:
                 try:
                     item = input_queue.get()
                     if item is None:
+                        print(f"🧵 流水线线程 {thread_id} 退出")
                         break
                     
-                    # 处理音频段
-                    result = funasr_transcribe(item['audio'], sample_rate)
+                    print(f"🔄 线程 {thread_id} 处理段 {item['index']}")
+                    
+                    # 处理音频段，增加重试机制
+                    max_retries = 2
+                    result = None
+                    for retry in range(max_retries + 1):
+                        try:
+                            result = funasr_transcribe(item['audio'], sample_rate)
+                            break
+                        except Exception as retry_error:
+                            if retry < max_retries:
+                                print(f"⚠️ 线程 {thread_id} 段 {item['index']} 重试 {retry + 1}/{max_retries}: {retry_error}")
+                                import time
+                                time.sleep(1)
+                                continue
+                            else:
+                                raise retry_error
                     
                     # 调整时间戳
                     if result and 'speaker_segments' in result:
@@ -1714,10 +1818,20 @@ def funasr_transcribe_pipeline(audio_data, sample_rate=16000, task_id=None):
                             segment['end'] += item['start_time']
                     
                     output_queue.put((item['index'], result))
+                    print(f"✅ 线程 {thread_id} 段 {item['index']} 完成")
                     
                 except Exception as e:
-                    print(f"⚠️ 流水线worker错误: {e}")
-                    output_queue.put((item['index'], None))
+                    print(f"❌ 流水线worker错误 (线程 {thread_id}): {e}")
+                    import traceback
+                    print(f"📋 错误详情: {traceback.format_exc()}")
+                    # 返回空结果
+                    output_queue.put((item['index'], {
+                        "text": "",
+                        "timestamp": "",
+                        "language": "zh",
+                        "result": {},
+                        "speaker_segments": []
+                    }))
                 finally:
                     input_queue.task_done()
         
