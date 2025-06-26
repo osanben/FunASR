@@ -178,16 +178,14 @@ parser.add_argument("--env", type=str, default="local", choices=["local", "test"
 
 args = parser.parse_args()
 
-# 根据环境设置服务器地址
+# 根据环境设置WebSocket地址
 if args.env == "local":
-    HTTP_BASE_URL = f"http://127.0.0.1:{args.http_port}"
     WS_BASE_URL = f"ws://127.0.0.1:{args.port}"
 else:  # test环境
-    HTTP_BASE_URL = "https://gpu-pod6859164ddd21426e6e55774b-8080.node.inscode.run"
     WS_BASE_URL = "wss://gpu-pod6859164ddd21426e6e55774b-10095.node.inscode.run"
 
 print(f"🌍 运行环境: {args.env}")
-print(f"🌐 HTTP地址: {HTTP_BASE_URL}")
+print(f"🌐 HTTP端口: {args.http_port}")
 print(f"🌐 WebSocket地址: {WS_BASE_URL}")
 
 # 创建上传目录
@@ -1866,7 +1864,8 @@ async def status_handler(request):
                             # 查找对应的音频文件信息
                             for seg_info in segments_info:
                                 if seg_info["segment_id"] == segment_id:
-                                    segment["audio_url"] = f"{HTTP_BASE_URL}/audio_segments/{seg_info['relative_path']}"
+                                    # 使用相对路径，让前端根据当前访问域名自动构建完整URL
+                                    segment["audio_url"] = f"/audio_segments/{seg_info['relative_path']}"
                                     segment["file_size"] = seg_info["file_size"]
                                     break
             
@@ -2695,11 +2694,7 @@ async def create_http_app():
             with open(html_file, 'r', encoding='utf-8') as f:
                 html_content = f.read()
             
-            # 替换服务器地址
-            html_content = html_content.replace(
-                'https://gpu-pod6859164ddd21426e6e55774b-8080.node.inscode.run', 
-                HTTP_BASE_URL
-            )
+            # 替换WebSocket地址（HTTP地址由前端动态获取，无需替换）
             html_content = html_content.replace(
                 'wss://gpu-pod6859164ddd21426e6e55774b-10095.node.inscode.run/', 
                 WS_BASE_URL + '/'
