@@ -45,8 +45,89 @@ websocket_connections = {}
 task_results = {}
 task_lock = threading.Lock()
 
-# 线程池用于音频处理
-executor = ThreadPoolExecutor(max_workers=4)
+# 并发控制
+import queue
+import psutil
+import threading
+from collections import deque
+
+class ConcurrencyController:
+    """智能并发控制器"""
+    
+    def __init__(self, max_workers):
+        self.max_workers = max_workers
+        self.current_tasks = 0
+        self.task_queue = queue.Queue()
+        self.processing_times = deque(maxlen=50)  # 记录最近50个任务的处理时间
+        self.lock = threading.Lock()
+        
+    def can_accept_task(self):
+        """检查是否可以接受新任务"""
+        with self.lock:
+            # 检查当前任务数
+            if self.current_tasks >= self.max_workers:
+                return False
+            
+            # 检查系统资源
+            cpu_percent = psutil.cpu_percent(interval=0.1)
+            memory_percent = psutil.virtual_memory().percent
+            
+            # 如果是GPU设备，更宽松的CPU限制
+            if args.device in ["cuda", "gpu"]:
+                cpu_threshold = 90  # GPU设备可以容忍更高CPU使用率
+                memory_threshold = 90
+            else:
+                cpu_threshold = 85
+                memory_threshold = 85
+            
+            if cpu_percent > cpu_threshold or memory_percent > memory_threshold:
+                print(f"⚠️ 系统负载过高 CPU: {cpu_percent:.1f}%, 内存: {memory_percent:.1f}%")
+                return False
+                
+            return True
+    
+    def start_task(self):
+        """开始任务"""
+        with self.lock:
+            self.current_tasks += 1
+            print(f"📈 当前并发任务: {self.current_tasks}/{self.max_workers}")
+    
+    def finish_task(self, processing_time=None):
+        """完成任务"""
+        with self.lock:
+            self.current_tasks = max(0, self.current_tasks - 1)
+            if processing_time:
+                self.processing_times.append(processing_time)
+            print(f"📉 当前并发任务: {self.current_tasks}/{self.max_workers}")
+    
+    def get_avg_processing_time(self):
+        """获取平均处理时间"""
+        if not self.processing_times:
+            return 0
+        return sum(self.processing_times) / len(self.processing_times)
+    
+    def adjust_concurrency(self):
+        """动态调整并发数"""
+        if len(self.processing_times) < 10:
+            return
+            
+        avg_time = self.get_avg_processing_time()
+        cpu_percent = psutil.cpu_percent(interval=1)
+        memory_percent = psutil.virtual_memory().percent
+        
+        # 根据性能调整并发数
+        if cpu_percent < 70 and memory_percent < 80 and avg_time < 30:
+            # 系统负载低且处理快，可以增加并发
+            new_max = min(self.max_workers + 1, optimal_workers * 2)
+            if new_max > self.max_workers:
+                self.max_workers = new_max
+                print(f"🚀 增加并发数至: {self.max_workers}")
+        elif cpu_percent > 90 or memory_percent > 90:
+            # 系统负载过高，减少并发
+            new_max = max(self.max_workers - 1, 2)
+            if new_max < self.max_workers:
+                self.max_workers = new_max
+                print(f"⚠️ 降低并发数至: {self.max_workers}")
 
 # 说话人管理器
 speaker_manager = None
@@ -56,6 +137,12 @@ audio_segment_manager = None
 
 # 说话人识别模型缓存
 speaker_recognition_model = None
+
+# 全局变量用于存储配置
+executor = None
+concurrency_controller = None
+gpu_batch_size = 1
+gpu_memory_threshold = 0.85
 
 # 解析命令行参数
 parser = argparse.ArgumentParser()
@@ -193,6 +280,126 @@ print("🗄️ 初始化数据库...")
 db = FunASRDatabase()
 print("✅ 数据库初始化完成!")
 
+# 线程池用于音频处理 - 动态配置
+def get_optimal_workers():
+    """根据设备类型和资源情况动态计算最优worker数量"""
+    import os
+    cpu_count = os.cpu_count()
+    
+    if args.device == "cuda" or args.device == "gpu":
+        # GPU环境：可以支持更高并发，因为GPU并行处理能力强
+        if args.ngpu >= 2:
+            return min(cpu_count * 2, 16)  # 多GPU可以支持更高并发
+        else:
+            return min(cpu_count, 12)      # 单GPU适中并发
+    elif args.device == "cpu":
+        # CPU环境：根据CPU核心数调整
+        return min(cpu_count, 8)
+    else:
+        return 4  # 默认值
+
+# 动态设置线程池大小
+print("🔧 初始化线程池和并发控制器...")
+optimal_workers = get_optimal_workers()
+executor = ThreadPoolExecutor(max_workers=optimal_workers)
+print(f"🔧 线程池配置: {optimal_workers} workers (设备: {args.device}, GPU数量: {args.ngpu})")
+
+# 创建并发控制器
+concurrency_controller = ConcurrencyController(optimal_workers)
+
+# GPU优化配置
+def optimize_gpu_settings():
+    """优化GPU设置"""
+    global gpu_batch_size
+    
+    if args.device in ["cuda", "gpu"]:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                gpu_count = torch.cuda.device_count()
+                for i in range(gpu_count):
+                    gpu_memory = torch.cuda.get_device_properties(i).total_memory / 1024**3
+                    print(f"🎮 GPU {i}: {torch.cuda.get_device_name(i)}, 显存: {gpu_memory:.1f}GB")
+                
+                # 根据显存大小调整批处理
+                if gpu_memory >= 24:  # 24GB+
+                    gpu_batch_size = 4
+                elif gpu_memory >= 12:  # 12GB+
+                    gpu_batch_size = 2
+                else:  # <12GB
+                    gpu_batch_size = 1
+                    
+                print(f"🚀 GPU批处理大小: {gpu_batch_size}")
+                
+                # 设置GPU内存优化
+                torch.cuda.empty_cache()
+                if hasattr(torch.cuda, 'set_per_process_memory_fraction'):
+                    torch.cuda.set_per_process_memory_fraction(0.9)  # 使用90%显存
+                    
+        except ImportError:
+            print("⚠️ PyTorch未安装，无法进行GPU优化")
+        except Exception as e:
+            print(f"⚠️ GPU优化失败: {e}")
+
+# 执行GPU优化
+optimize_gpu_settings()
+
+# GPU监控和内存管理
+def monitor_gpu_memory():
+    """监控GPU内存使用情况"""
+    if args.device in ["cuda", "gpu"]:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                for i in range(torch.cuda.device_count()):
+                    memory_allocated = torch.cuda.memory_allocated(i) / 1024**3
+                    memory_reserved = torch.cuda.memory_reserved(i) / 1024**3
+                    memory_total = torch.cuda.get_device_properties(i).total_memory / 1024**3
+                    
+                    usage_percent = (memory_allocated / memory_total) * 100
+                    
+                    if usage_percent > 85:
+                        print(f"⚠️ GPU {i} 内存使用率过高: {usage_percent:.1f}% ({memory_allocated:.1f}GB/{memory_total:.1f}GB)")
+                        # 清理GPU缓存
+                        torch.cuda.empty_cache()
+                        print(f"🧹 已清理GPU {i} 缓存")
+                    
+                    return {
+                        f"gpu_{i}_memory_used": memory_allocated,
+                        f"gpu_{i}_memory_total": memory_total,
+                        f"gpu_{i}_usage_percent": usage_percent
+                    }
+        except Exception as e:
+            print(f"⚠️ GPU监控失败: {e}")
+    return {}
+
+def optimize_batch_processing():
+    """根据当前负载优化批处理"""
+    global gpu_batch_size
+    
+    if args.device in ["cuda", "gpu"]:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                # 获取GPU内存使用情况
+                memory_info = monitor_gpu_memory()
+                current_tasks = concurrency_controller.current_tasks
+                
+                # 根据当前任务数和GPU内存动态调整批处理大小
+                if current_tasks <= 2:
+                    # 低负载时可以使用更大的批处理
+                    gpu_batch_size = min(4, gpu_batch_size + 1)
+                elif current_tasks >= 6:
+                    # 高负载时减少批处理大小
+                    gpu_batch_size = max(1, gpu_batch_size - 1)
+                
+                print(f"🔧 动态调整批处理大小: {gpu_batch_size} (当前任务: {current_tasks})")
+                
+        except Exception as e:
+            print(f"⚠️ 批处理优化失败: {e}")
+
+print("✅ 线程池和并发控制器初始化完成!")
+
 # 初始化系统监控器
 print("🔍 初始化系统监控器...")
 system_monitor = get_system_monitor(db)
@@ -201,11 +408,14 @@ print("✅ 系统监控器初始化完成!")
 
 def process_audio_file(file_path, task_id, model_type):
     """处理音频文件的主函数"""
+    processing_start_time = time.time()
+    
     try:
         print(f"🎵 开始处理任务 {task_id}: {file_path}")
         
         # 增加并发任务计数
         system_monitor.increment_concurrent_tasks()
+        concurrency_controller.start_task()
         
         # 记录各阶段时间
         task_start_time = time.time()
@@ -392,6 +602,13 @@ def process_audio_file(file_path, task_id, model_type):
         
         # 减少并发任务计数
         system_monitor.decrement_concurrent_tasks()
+        
+        # 完成并发控制
+        total_processing_time = time.time() - processing_start_time
+        concurrency_controller.finish_task(total_processing_time)
+        
+        # 动态调整并发数
+        concurrency_controller.adjust_concurrency()
             
     except Exception as e:
         print(f"❌ 处理任务 {task_id} 失败: {e}")
@@ -409,6 +626,10 @@ def process_audio_file(file_path, task_id, model_type):
         
         # 减少并发任务计数
         system_monitor.decrement_concurrent_tasks()
+        
+        # 完成并发控制（即使失败也要清理）
+        total_processing_time = time.time() - processing_start_time
+        concurrency_controller.finish_task(total_processing_time)
 
 def whisper_transcribe(audio_data, sample_rate=16000):
     """使用Whisper进行语音识别"""
@@ -1256,6 +1477,16 @@ async def upload_handler(request):
                 
                 # 添加到数据库
                 db.add_transcription_task(task_id, filename, file_size, args.model_type)
+                
+                # 检查是否可以接受新任务
+                if not concurrency_controller.can_accept_task():
+                    return web.json_response({
+                        "error": "服务器负载过高，请稍后重试",
+                        "current_load": {
+                            "concurrent_tasks": concurrency_controller.current_tasks,
+                            "max_workers": concurrency_controller.max_workers
+                        }
+                    }, status=503)
                 
                 # 提交处理任务
                 executor.submit(process_audio_file, file_path, task_id, args.model_type)
@@ -2547,6 +2778,39 @@ async def main():
     print(f"🎯 模型类型: {args.model_type}")
     print(f"🌐 HTTP服务: http://{args.host}:{args.http_port}")
     print(f"🌐 WebSocket服务: ws://{args.host}:{args.port}")
+    print(f"🧵 线程池大小: {optimal_workers}")
+    print(f"🎮 GPU批处理大小: {gpu_batch_size}")
+    
+    # 启动系统监控器
+    system_monitor.start_monitoring()
+    print("🔧 系统监控器已启动")
+    
+    # 启动定期优化任务
+    async def periodic_optimization():
+        """定期执行优化任务"""
+        while True:
+            try:
+                await asyncio.sleep(60)  # 每60秒执行一次
+                
+                # 调整并发数
+                concurrency_controller.adjust_concurrency()
+                
+                # 优化批处理
+                optimize_batch_processing()
+                
+                # 监控GPU内存
+                gpu_info = monitor_gpu_memory()
+                if gpu_info:
+                    print(f"🎮 GPU状态: {gpu_info}")
+                
+                # 打印当前状态
+                print(f"📊 当前状态: 并发 {concurrency_controller.current_tasks}/{concurrency_controller.max_workers}, 批处理 {gpu_batch_size}")
+                
+            except Exception as e:
+                print(f"⚠️ 定期优化任务失败: {e}")
+    
+    # 启动优化任务
+    optimization_task = asyncio.create_task(periodic_optimization())
     
     # 启动HTTP服务器
     http_app = await create_http_app()
@@ -2566,8 +2830,16 @@ async def main():
     print("✅ 服务器启动完成！")
     print(f"📝 访问 http://{args.host}:{args.http_port} 进行文件上传")
     
-    # 保持运行
-    await asyncio.Future()
+    try:
+        # 保持运行
+        await asyncio.Future()
+    except KeyboardInterrupt:
+        print("🛑 收到停止信号，正在关闭服务器...")
+    finally:
+        optimization_task.cancel()
+        executor.shutdown(wait=True)
+        system_monitor.stop_monitoring()
+        print("✅ 服务器已关闭")
 
 if __name__ == "__main__":
     asyncio.run(main()) 
