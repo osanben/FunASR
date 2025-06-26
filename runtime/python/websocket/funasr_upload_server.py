@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+# 🔧 全局线程控制 - 在所有导入之前设置
+import os
+print("🔧 开始设置全局线程控制...")
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
+os.environ['NUMEXPR_NUM_THREADS'] = '1'
+os.environ['BLIS_NUM_THREADS'] = '1'
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+print("✅ 全局线程控制设置完成，所有模块将使用单线程模式")
+
 import argparse
 import asyncio
 import json
@@ -33,8 +45,12 @@ try:
     from pyannote.audio import Pipeline
     import torch
     import soundfile as sf
+    # 🔧 设置PyTorch线程数
+    torch.set_num_threads(1)
+    torch.set_num_interop_threads(1)
     PYANNOTE_AVAILABLE = True
     print("✅ pyannote.audio 可用，将使用专业说话人分离模型")
+    print("🔧 PyTorch线程已设置为1")
 except ImportError:
     print("📋 提示: 安装 pyannote.audio 和 soundfile 可启用专业说话人分离功能")
     print("📋 安装命令: pip install pyannote.audio soundfile")
@@ -700,6 +716,20 @@ def whisper_transcribe(audio_data, sample_rate=16000):
 
 def detect_speakers_with_voice_print(audio_data, segments, sample_rate=16000):
     """使用专业音色模型进行说话人分离"""
+    
+    # 🔧 强制设置单线程模式 - 防止libgomp错误
+    import os
+    import torch
+    os.environ['OMP_NUM_THREADS'] = '1'
+    os.environ['MKL_NUM_THREADS'] = '1'
+    os.environ['LIBIOMP_NUM_THREADS'] = '1'
+    try:
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+    except:
+        pass
+    print("🔧 CAM++函数已强制设置单线程模式")
+    
     try:
         if not segments:
             return []
