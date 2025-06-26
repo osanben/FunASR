@@ -51,3 +51,4 @@ audio_segments/
 uploads/
 speaker_database/
 */*/*/*/*.wav
+funasr_data.db
