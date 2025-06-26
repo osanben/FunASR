@@ -174,8 +174,6 @@
                     </div>
                 </div>
 
-
-
                 <!-- 说话人管理页面 -->
                 <div id="speakers-content" class="space-y-6" style="display: none;">
                     <!-- 注册新说话人 -->
@@ -222,13 +220,19 @@
                         <div class="p-6 border-b">
                             <div class="flex justify-between items-center">
                                 <h3 class="text-lg font-semibold">转录历史</h3>
-                                <select id="history-filter" onchange="loadHistory()" 
-                                        class="px-3 py-1 border border-gray-300 rounded-md text-sm">
-                                    <option value="">全部状态</option>
-                                    <option value="completed">已完成</option>
-                                    <option value="processing">处理中</option>
-                                    <option value="error">错误</option>
-                                </select>
+                                <div class="flex space-x-4">
+                                    <select id="history-filter" onchange="loadHistory()" 
+                                            class="px-3 py-1 border border-gray-300 rounded-md text-sm">
+                                        <option value="">全部状态</option>
+                                        <option value="completed">已完成</option>
+                                        <option value="processing">处理中</option>
+                                        <option value="error">错误</option>
+                                    </select>
+                                    <button onclick="loadHistory()" 
+                                            class="px-3 py-1 bg-blue-500 text-white rounded-md text-sm hover:bg-blue-600">
+                                        🔄 刷新
+                                    </button>
+                                </div>
                             </div>
                         </div>
                         <div class="p-6">
@@ -240,6 +244,43 @@
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 说话人编辑模态框 -->
+    <div id="speakerModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000;">
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px; border-radius: 10px; width: 90%; max-width: 500px;">
+            <h3 style="margin-bottom: 20px; color: #333;">✏️ 编辑说话人</h3>
+            
+            <div style="margin-bottom: 15px;">
+                <label style="display: block; margin-bottom: 5px; font-weight: bold;">当前说话人:</label>
+                <span id="currentSpeakerName" style="color: #666; font-size: 16px;"></span>
+            </div>
+            
+            <div style="margin-bottom: 15px;">
+                <label for="speakerSelect" style="display: block; margin-bottom: 5px; font-weight: bold;">选择已注册的说话人:</label>
+                <select id="speakerSelect" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                    <option value="">-- 选择已注册的说话人 --</option>
+                </select>
+            </div>
+            
+            <div style="margin-bottom: 20px;">
+                <label for="newSpeakerName" style="display: block; margin-bottom: 5px; font-weight: bold;">或输入新的姓名:</label>
+                <input type="text" id="newSpeakerName" placeholder="输入新说话人姓名" 
+                       style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                <small style="color: #666; font-size: 12px;">如果输入新姓名，系统将自动为其注册音色</small>
+            </div>
+            
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button onclick="closeSpeakerModal()" 
+                        style="padding: 8px 16px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                    取消
+                </button>
+                <button onclick="saveSpeakerChange()" 
+                        style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                    保存
+                </button>
             </div>
         </div>
     </div>

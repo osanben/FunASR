@@ -269,17 +269,39 @@ def process_audio_file(file_path, task_id, model_type):
         
         # 保存结果到数据库
         try:
+            # 提取转录文本
+            transcription_text = ""
+            segments_data = []
+            speaker_results = []
+            
+            if "funasr" in results:
+                funasr_result = results["funasr"]
+                transcription_text = funasr_result.get('text', '') or funasr_result.get('timestamp', '')
+                segments_data = funasr_result.get('segments', [])
+                speaker_results = funasr_result.get('speaker_segments', [])
+            elif "whisper" in results:
+                whisper_result = results["whisper"]
+                transcription_text = whisper_result.get('text', '') or whisper_result.get('timestamp', '')
+                segments_data = whisper_result.get('segments', [])
+                speaker_results = whisper_result.get('speaker_segments', [])
+            
+            # 获取音频时长
+            duration = len(audio_data) / 16000 if audio_data is not None else None
+            
             db.update_transcription_result(
                 task_id=task_id,
-                transcription_text=results.get('transcription_text', ''),
-                segments_data=results.get('segments', []),
-                speaker_results=results.get('speaker_results', []),
-                duration=results.get('duration'),
+                transcription_text=transcription_text,
+                segments_data=segments_data,
+                speaker_results=speaker_results,
+                duration=duration,
                 processing_time=time.time() - start_time,
                 status='completed'
             )
+            print(f"✅ 转录结果已保存到数据库: {len(transcription_text)} 字符")
         except Exception as e:
             print(f"⚠️ 保存结果到数据库失败: {e}")
+            import traceback
+            traceback.print_exc()
         
         # 保存性能报告
         try:
@@ -289,7 +311,7 @@ def process_audio_file(file_path, task_id, model_type):
             # 这里需要从实际的处理过程中获取各个阶段的时间
             # 暂时使用估算值，后续可以在实际处理过程中记录
             total_time = time.time() - start_time
-            audio_duration = results.get('duration', 0)
+            audio_duration = duration or 0  # 使用上面计算的duration
             
             # 估算各阶段时间（基于经验比例）
             transcription_time = total_time * 0.6  # 转录占60%
@@ -307,7 +329,12 @@ def process_audio_file(file_path, task_id, model_type):
                 model_type=model_type,
                 device_type=args.device
             )
-            print(f"📊 性能报告已保存: 总时长{total_time:.2f}s, 音频{audio_duration:.2f}s, 倍率{total_time/audio_duration:.2f}x")
+            # 避免除零错误
+            if audio_duration > 0:
+                ratio = total_time / audio_duration
+                print(f"📊 性能报告已保存: 总时长{total_time:.2f}s, 音频{audio_duration:.2f}s, 倍率{ratio:.2f}x")
+            else:
+                print(f"📊 性能报告已保存: 总时长{total_time:.2f}s, 音频时长未知")
         except Exception as e:
             print(f"⚠️ 保存性能报告失败: {e}")
         
@@ -1427,11 +1454,68 @@ async def transcription_history_handler(request):
         limit = int(request.query.get('limit', 100))
         offset = int(request.query.get('offset', 0))
         status = request.query.get('status')
+        search = request.query.get('search')
+        date_filter = request.query.get('date_filter')
+        task_id = request.query.get('task_id')
         
+        # 获取基础历史数据
         history = db.get_transcription_history(limit=limit, offset=offset, status=status)
-        return web.json_response(history)
+        
+        # 为每个记录添加额外信息
+        enhanced_history = []
+        for record in history:
+            # 如果指定了task_id，只返回匹配的记录
+            if task_id and record.get('task_id') != task_id:
+                continue
+                
+            # 搜索过滤
+            if search:
+                search_text = search.lower()
+                if (search_text not in record.get('filename', '').lower() and 
+                    search_text not in record.get('transcription_text', '').lower()):
+                    continue
+            
+            # 日期过滤
+            if date_filter and date_filter != 'all':
+                from datetime import datetime, timedelta
+                record_date = datetime.fromisoformat(record['created_at'].replace('Z', '+00:00'))
+                now = datetime.now()
+                
+                if date_filter == 'today':
+                    cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                elif date_filter == 'week':
+                    cutoff = now - timedelta(days=7)
+                elif date_filter == 'month':
+                    cutoff = now - timedelta(days=30)
+                else:
+                    cutoff = None
+                
+                if cutoff and record_date < cutoff:
+                    continue
+            
+            # 获取音频片段数量
+            segments = db.get_segments_by_task(record['task_id'])
+            record['audio_segments_count'] = len(segments) if segments else 0
+            
+            # 计算说话人数量
+            if segments:
+                speakers = set(seg.get('speaker_name') for seg in segments if seg.get('speaker_name'))
+                record['speaker_count'] = len(speakers)
+            else:
+                record['speaker_count'] = 0
+            
+            enhanced_history.append(record)
+        
+        return web.json_response({
+            "success": True,
+            "history": enhanced_history,
+            "total": len(enhanced_history)
+        })
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+        print(f"❌ 获取转录历史错误: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.json_response({"success": False, "error": str(e)}, status=500)
 
 async def batch_upload_handler(request):
     """批量上传处理器 - 支持单个文件上传到批量队列"""
@@ -1582,6 +1666,179 @@ async def audio_segment_handler(request):
         traceback.print_exc()
         return web.Response(text="服务器错误", status=500)
 
+async def audio_segments_list_handler(request):
+    """获取指定任务的音频片段列表"""
+    try:
+        task_id = request.match_info['task_id']
+        print(f"🔍 获取音频片段列表: task_id={task_id}")
+        
+        # 从数据库获取音频片段信息
+        segments = db.get_segments_by_task(task_id)
+        
+        if not segments:
+            return web.json_response({
+                "success": False,
+                "error": "未找到音频片段"
+            }, status=404)
+        
+        # 格式化片段信息
+        formatted_segments = []
+        for segment in segments:
+            formatted_segments.append({
+                "id": segment.get("id"),
+                "task_id": segment.get("task_id"),
+                "segment_index": segment.get("segment_index"),
+                "speaker_name": segment.get("speaker_name", "未知说话人"),
+                "text": segment.get("text", ""),
+                "start_time": segment.get("start_time", 0),
+                "end_time": segment.get("end_time", 0),
+                "file_path": segment.get("file_path", ""),
+                "similarity_score": segment.get("similarity_score", 0)
+            })
+        
+        return web.json_response({
+            "success": True,
+            "segments": formatted_segments
+        })
+        
+    except Exception as e:
+        print(f"❌ 获取音频片段列表错误: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+async def register_speaker_from_segment_handler(request):
+    """从音频片段注册说话人"""
+    try:
+        data = await request.json()
+        speaker_name = data.get('speaker_name')
+        audio_file_path = data.get('audio_file_path')
+        text_sample = data.get('text_sample', '')
+        
+        if not speaker_name or not audio_file_path:
+            return web.json_response({
+                "success": False,
+                "error": "缺少必要参数"
+            }, status=400)
+        
+        print(f"📝 从音频片段注册说话人: {speaker_name}")
+        print(f"📁 音频文件路径: {audio_file_path}")
+        
+        # 检查文件是否存在
+        if not os.path.exists(audio_file_path):
+            return web.json_response({
+                "success": False,
+                "error": f"音频文件不存在: {audio_file_path}"
+            }, status=404)
+        
+        # 检查说话人是否已存在
+        existing_speakers = speaker_manager.list_speakers()
+        for speaker in existing_speakers:
+            if speaker['name'] == speaker_name:
+                return web.json_response({
+                    "success": False,
+                    "error": f"说话人 '{speaker_name}' 已存在"
+                }, status=400)
+        
+        # 注册说话人
+        try:
+            result = speaker_manager.register_speaker(speaker_name, audio_file_path)
+            if result['success']:
+                print(f"✅ 说话人注册成功: {speaker_name}")
+                return web.json_response({
+                    "success": True,
+                    "message": f"说话人 '{speaker_name}' 注册成功",
+                    "speaker_id": result.get('speaker_id')
+                })
+            else:
+                return web.json_response({
+                    "success": False,
+                    "error": result.get('error', '注册失败')
+                }, status=500)
+        except Exception as e:
+            print(f"❌ 注册说话人失败: {e}")
+            return web.json_response({
+                "success": False,
+                "error": f"注册失败: {str(e)}"
+            }, status=500)
+        
+    except Exception as e:
+        print(f"❌ 注册说话人API错误: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.json_response({
+            "success": False,
+            "error": str(e)
+        }, status=500)
+
+async def download_results_handler(request):
+    """下载转录结果"""
+    try:
+        task_id = request.match_info['task_id']
+        print(f"📥 下载结果请求: task_id={task_id}")
+        
+        # 从数据库获取转录结果
+        history = db.get_transcription_history(limit=1, offset=0, task_id=task_id)
+        
+        if not history or len(history) == 0:
+            return web.Response(text="未找到转录结果", status=404)
+        
+        result = history[0]
+        
+        # 构建结果文本
+        content_lines = [
+            f"转录结果报告",
+            f"=" * 50,
+            f"文件名: {result.get('filename', '未知')}",
+            f"任务ID: {task_id}",
+                         f"处理时间: {result.get('created_at', '未知')}",
+            f"处理状态: {result.get('status', '未知')}",
+            f"说话人数量: {result.get('speaker_count', 0)}",
+            f"",
+            f"转录内容:",
+            f"-" * 30,
+            result.get('transcription_text', '无转录内容'),
+            f"",
+        ]
+        
+        # 添加音频片段信息
+        segments = db.get_segments_by_task(task_id)
+        if segments:
+            content_lines.extend([
+                f"音频片段详情:",
+                f"-" * 30,
+            ])
+            
+            for i, segment in enumerate(segments, 1):
+                content_lines.extend([
+                    f"片段 {i}:",
+                    f"  说话人: {segment.get('speaker_name', '未知')}",
+                    f"  时间: {segment.get('start_time', 0):.1f}s - {segment.get('end_time', 0):.1f}s",
+                    f"  内容: {segment.get('text', '')}",
+                    f"",
+                ])
+        
+        content = '\n'.join(content_lines)
+        
+        # 返回文件下载
+        filename = f"transcription_result_{task_id}.txt"
+        return web.Response(
+            text=content,
+            headers={
+                'Content-Type': 'text/plain; charset=utf-8',
+                'Content-Disposition': f'attachment; filename="{filename}"'
+            }
+        )
+        
+    except Exception as e:
+        print(f"❌ 下载结果错误: {e}")
+        import traceback
+        traceback.print_exc()
+        return web.Response(text="下载失败", status=500)
+
 async def create_http_app():
     app = web.Application()
     
@@ -1621,6 +1878,11 @@ async def create_http_app():
     
     # 添加音频片段服务路由
     app.router.add_get('/audio_segments/{task_id}/{filename}', audio_segment_handler)
+    
+    # 新增API接口
+    app.router.add_get('/api/audio_segments/{task_id}', audio_segments_list_handler)
+    app.router.add_post('/api/register_speaker_from_segment', register_speaker_from_segment_handler)
+    app.router.add_get('/api/download_results/{task_id}', download_results_handler)
     
     # 添加静态文件路由
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1685,6 +1947,18 @@ async def create_http_app():
     
     app.router.add_get('/batch_processing', batch_processing_handler)
     app.router.add_get('/performance_report', performance_report_handler)
+    
+    # 添加转录历史页面路由
+    async def transcription_history_page_handler(request):
+        try:
+            html_file = os.path.join(current_dir, 'transcription_history.html')
+            with open(html_file, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            return web.Response(text=html_content, content_type='text/html')
+        except Exception as e:
+            return web.Response(text=f"Error loading transcription history page: {e}", status=500)
+    
+    app.router.add_get('/transcription_history', transcription_history_page_handler)
     
     # 添加静态文件服务（可选）
     async def root_handler(request):

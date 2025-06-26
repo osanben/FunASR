@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>转录历史 - FunASR 控制台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .audio-segment {
+            transition: all 0.3s ease;
+        }
+        .audio-segment:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .speaker-tag {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .speaker-known {
+            background-color: #dcfce7;
+            color: #166534;
+        }
+        .speaker-unknown {
+            background-color: #f3f4f6;
+            color: #6b7280;
+        }
+        .play-button {
+            transition: all 0.2s ease;
+        }
+        .play-button:hover {
+            transform: scale(1.1);
+        }
+        .sidebar {
+            transition: transform 0.3s ease;
+        }
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+            .sidebar.open {
+                transform: translateX(0);
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- 移动端菜单按钮 -->
+    <div class="md:hidden fixed top-4 left-4 z-50">
+        <button id="mobile-menu-btn" class="bg-blue-600 text-white p-2 rounded-lg shadow-lg">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+            </svg>
+        </button>
+    </div>
+
+    <div class="flex min-h-screen">
+        <!-- 左侧导航 -->
+        <nav id="sidebar" class="sidebar fixed md:static inset-y-0 left-0 z-40 w-64 bg-white shadow-lg">
+            <div class="p-6 border-b">
+                <h1 class="text-xl font-bold text-gray-800">FunASR 控制台</h1>
+            </div>
+            
+            <div class="p-4">
+                <ul class="space-y-2">
+                    <li>
+                        <a href="/dashboard" class="flex items-center px-4 py-2 text-gray-700 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors">
+                            <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"></path>
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m8 5 4-4 4 4"></path>
+                            </svg>
+                            控制台概览
+                        </a>
+                    </li>
+                    <li>
+                        <a href="/dashboard#upload" class="flex items-center px-4 py-2 text-gray-700 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors">
+                            <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
+                            </svg>
+                            音频上传
+                        </a>
+                    </li>
+                    <li>
+                        <a href="/batch_processing" class="flex items-center px-4 py-2 text-gray-700 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors">
+                            <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path>
+                            </svg>
+                            批量处理
+                        </a>
+                    </li>
+                    <li>
+                        <a href="/transcription_history" class="flex items-center px-4 py-2 bg-blue-100 text-blue-600 rounded-lg">
+                            <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                            </svg>
+                            转录历史
+                        </a>
+                    </li>
+                    <li>
+                        <a href="/dashboard#speakers" class="flex items-center px-4 py-2 text-gray-700 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors">
+                            <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z"></path>
+                            </svg>
+                            说话人管理
+                        </a>
+                    </li>
+                    <li>
+                        <a href="/performance_report" class="flex items-center px-4 py-2 text-gray-700 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition-colors">
+                            <svg class="w-5 h-5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                            </svg>
+                            性能报告
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </nav>
+
+        <!-- 主内容区域 -->
+        <main class="flex-1 md:ml-0">
+            <div class="p-6">
+                <!-- 页面标题 -->
+                <div class="mb-8">
+                    <h1 class="text-3xl font-bold text-gray-900 mb-2">转录历史</h1>
+                    <p class="text-gray-600">查看所有音频转录记录，支持播放音频片段和管理说话人</p>
+                </div>
+
+                <!-- 筛选和搜索 -->
+                <div class="bg-white rounded-lg shadow mb-6 p-4">
+                    <div class="flex flex-wrap gap-4 items-center">
+                        <div class="flex-1 min-w-64">
+                            <input type="text" id="search-input" placeholder="搜索文件名或转录内容..." 
+                                   class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                        </div>
+                        <select id="status-filter" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                            <option value="">全部状态</option>
+                            <option value="completed">已完成</option>
+                            <option value="processing">处理中</option>
+                            <option value="failed">失败</option>
+                        </select>
+                        <select id="date-filter" class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
+                            <option value="">全部时间</option>
+                            <option value="today">今天</option>
+                            <option value="week">本周</option>
+                            <option value="month">本月</option>
+                        </select>
+                        <button onclick="loadHistory()" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors">
+                            <svg class="w-4 h-4 inline mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                            刷新
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 转录历史列表 -->
+                <div id="history-list" class="space-y-4">
+                    <!-- 历史记录将在这里动态加载 -->
+                </div>
+
+                <!-- 加载状态 -->
+                <div id="loading" class="text-center py-8 hidden">
+                    <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                    <p class="mt-2 text-gray-600">加载中...</p>
+                </div>
+
+                <!-- 空状态 -->
+                <div id="empty-state" class="text-center py-12 hidden">
+                    <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                    </svg>
+                    <h3 class="mt-2 text-sm font-medium text-gray-900">暂无转录历史</h3>
+                    <p class="mt-1 text-sm text-gray-500">开始上传音频文件进行转录吧</p>
+                    <div class="mt-6">
+                        <a href="/dashboard#upload" class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700">
+                            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                            </svg>
+                            上传音频
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 音频播放器模态框 -->
+    <div id="audio-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg max-w-md w-full p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-semibold">音频播放</h3>
+                <button onclick="closeAudioModal()" class="text-gray-400 hover:text-gray-600">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            <div id="audio-content">
+                <!-- 音频播放器内容 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 添加说话人模态框 -->
+    <div id="speaker-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-lg max-w-md w-full p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-semibold">添加为说话人</h3>
+                <button onclick="closeSpeakerModal()" class="text-gray-400 hover:text-gray-600">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+            <div id="speaker-form">
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">说话人姓名</label>
+                    <input type="text" id="speaker-name-input" placeholder="请输入说话人姓名" 
+                           class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                </div>
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">音频片段</label>
+                    <p id="speaker-audio-info" class="text-sm text-gray-600 bg-gray-50 p-2 rounded"></p>
+                </div>
+                <div class="flex justify-end space-x-3">
+                    <button onclick="closeSpeakerModal()" class="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                        取消
+                    </button>
+                    <button onclick="addSpeaker()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                        添加说话人
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentAudioSegment = null;
+        let currentSpeakers = [];
+
+        // 获取环境配置
+        function getBaseUrl() {
+            const env = 'test'; // 可以从URL参数或配置获取
+            if (env === 'test') {
+                return 'https://gpu-pod6859164ddd21426e6e55774b-8080.node.inscode.run';
+            }
+            return 'http://localhost:8080';
+        }
+
+        // 移动端菜单控制
+        document.getElementById('mobile-menu-btn').addEventListener('click', function() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.classList.toggle('open');
+        });
+
+        // 点击外部关闭菜单
+        document.addEventListener('click', function(e) {
+            const sidebar = document.getElementById('sidebar');
+            const menuBtn = document.getElementById('mobile-menu-btn');
+            
+            if (!sidebar.contains(e.target) && !menuBtn.contains(e.target)) {
+                sidebar.classList.remove('open');
+            }
+        });
+
+        // 加载转录历史
+        async function loadHistory() {
+            const loading = document.getElementById('loading');
+            const historyList = document.getElementById('history-list');
+            const emptyState = document.getElementById('empty-state');
+            
+            loading.classList.remove('hidden');
+            historyList.innerHTML = '';
+            emptyState.classList.add('hidden');
+
+            try {
+                const searchTerm = document.getElementById('search-input').value;
+                const statusFilter = document.getElementById('status-filter').value;
+                const dateFilter = document.getElementById('date-filter').value;
+
+                const params = new URLSearchParams();
+                if (searchTerm) params.append('search', searchTerm);
+                if (statusFilter) params.append('status', statusFilter);
+                if (dateFilter) params.append('date_filter', dateFilter);
+
+                const response = await fetch(`${getBaseUrl()}/api/transcription_history?${params.toString()}`);
+                const data = await response.json();
+
+                loading.classList.add('hidden');
+
+                if (data.success && data.history && data.history.length > 0) {
+                    renderHistoryList(data.history);
+                } else {
+                    emptyState.classList.remove('hidden');
+                }
+
+                // 加载说话人列表
+                await loadSpeakers();
+            } catch (error) {
+                console.error('加载历史失败:', error);
+                loading.classList.add('hidden');
+                emptyState.classList.remove('hidden');
+            }
+        }
+
+        // 渲染历史列表
+        function renderHistoryList(historyData) {
+            const historyList = document.getElementById('history-list');
+            
+            historyData.forEach(record => {
+                const historyItem = createHistoryItem(record);
+                historyList.appendChild(historyItem);
+            });
+        }
+
+        // 创建历史记录项
+        function createHistoryItem(record) {
+            const div = document.createElement('div');
+            div.className = 'bg-white rounded-lg shadow hover:shadow-md transition-shadow';
+            
+            const statusColor = getStatusColor(record.status);
+            const processingTime = record.processing_time ? `${record.processing_time.toFixed(1)}秒` : '未知';
+            const speakerCount = record.speaker_count || 0;
+            
+            div.innerHTML = `
+                <div class="p-6">
+                    <div class="flex justify-between items-start mb-4">
+                        <div class="flex-1">
+                            <h3 class="text-lg font-semibold text-gray-900 mb-2">${record.filename}</h3>
+                            <div class="flex flex-wrap gap-4 text-sm text-gray-600">
+                                <span class="flex items-center">
+                                    <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                    </svg>
+                                    ${new Date(record.created_at).toLocaleString()}
+                                </span>
+                                <span class="flex items-center">
+                                    <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                                    </svg>
+                                    处理时间: ${processingTime}
+                                </span>
+                                <span class="flex items-center">
+                                    <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                                    </svg>
+                                    ${speakerCount} 个说话人
+                                </span>
+                            </div>
+                        </div>
+                        <span class="px-3 py-1 rounded-full text-xs font-medium ${statusColor}">
+                            ${getStatusText(record.status)}
+                        </span>
+                    </div>
+                    
+                    ${record.transcription_text ? `
+                        <div class="mb-4">
+                            <h4 class="text-sm font-medium text-gray-700 mb-2">转录内容</h4>
+                            <div class="bg-gray-50 rounded-lg p-3 text-sm text-gray-800 max-h-32 overflow-y-auto">
+                                ${record.transcription_text}
+                            </div>
+                        </div>
+                    ` : ''}
+                    
+                    <div class="flex justify-between items-center">
+                        <div class="flex space-x-2">
+                            <button onclick="viewDetails('${record.task_id}')" 
+                                    class="text-blue-600 hover:text-blue-800 text-sm font-medium">
+                                查看详情
+                            </button>
+                            ${record.status === 'completed' ? `
+                                <button onclick="downloadResults('${record.task_id}')" 
+                                        class="text-green-600 hover:text-green-800 text-sm font-medium">
+                                    下载结果
+                                </button>
+                            ` : ''}
+                        </div>
+                        ${record.audio_segments_count > 0 ? `
+                            <button onclick="loadAudioSegments('${record.task_id}')" 
+                                    class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 transition-colors">
+                                查看音频片段 (${record.audio_segments_count})
+                            </button>
+                        ` : ''}
+                    </div>
+                </div>
+            `;
+            
+            return div;
+        }
+
+        // 获取状态颜色
+        function getStatusColor(status) {
+            switch (status) {
+                case 'completed': return 'bg-green-100 text-green-800';
+                case 'processing': return 'bg-yellow-100 text-yellow-800';
+                case 'failed': return 'bg-red-100 text-red-800';
+                default: return 'bg-gray-100 text-gray-800';
+            }
+        }
+
+        // 获取状态文本
+        function getStatusText(status) {
+            switch (status) {
+                case 'completed': return '已完成';
+                case 'processing': return '处理中';
+                case 'failed': return '失败';
+                default: return '未知';
+            }
+        }
+
+        // 加载音频片段
+        async function loadAudioSegments(taskId) {
+            try {
+                const response = await fetch(`${getBaseUrl()}/api/audio_segments/${taskId}`);
+                const data = await response.json();
+                
+                if (data.success && data.segments) {
+                    showAudioSegments(data.segments, taskId);
+                } else {
+                    alert('加载音频片段失败');
+                }
+            } catch (error) {
+                console.error('加载音频片段失败:', error);
+                alert('加载音频片段失败');
+            }
+        }
+
+        // 显示音频片段
+        function showAudioSegments(segments, taskId) {
+            const historyList = document.getElementById('history-list');
+            
+            // 找到对应的历史记录
+            const historyItems = historyList.children;
+            for (let item of historyItems) {
+                if (item.innerHTML.includes(taskId)) {
+                    // 检查是否已经显示了音频片段
+                    let segmentsDiv = item.querySelector('.audio-segments');
+                    if (segmentsDiv) {
+                        segmentsDiv.remove();
+                        return;
+                    }
+                    
+                    // 创建音频片段区域
+                    segmentsDiv = document.createElement('div');
+                    segmentsDiv.className = 'audio-segments mt-4 pt-4 border-t border-gray-200';
+                    
+                    let segmentsHtml = '<h4 class="text-sm font-medium text-gray-700 mb-3">音频片段</h4>';
+                    segmentsHtml += '<div class="grid gap-3">';
+                    
+                    segments.forEach((segment, index) => {
+                        const isKnownSpeaker = !segment.speaker_name.includes('说话人');
+                        const speakerClass = isKnownSpeaker ? 'speaker-known' : 'speaker-unknown';
+                        
+                        segmentsHtml += `
+                            <div class="audio-segment bg-gray-50 rounded-lg p-4 hover:bg-gray-100 transition-colors">
+                                <div class="flex justify-between items-start mb-2">
+                                    <div class="flex items-center space-x-2">
+                                        <span class="speaker-tag ${speakerClass}">
+                                            ${segment.speaker_name}
+                                        </span>
+                                        <span class="text-xs text-gray-500">
+                                            ${segment.start_time?.toFixed(1)}s - ${segment.end_time?.toFixed(1)}s
+                                        </span>
+                                        ${segment.similarity_score ? `
+                                            <span class="text-xs text-gray-500">
+                                                相似度: ${(segment.similarity_score * 100).toFixed(1)}%
+                                            </span>
+                                        ` : ''}
+                                    </div>
+                                    <div class="flex space-x-2">
+                                        <button onclick="playAudioSegment('${segment.file_path}', '${segment.speaker_name}', '${segment.text}')" 
+                                                class="play-button text-blue-600 hover:text-blue-800 p-1">
+                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h1.586a1 1 0 01.707.293l2.414 2.414a1 1 0 00.707.293H15a2 2 0 002-2V9a2 2 0 00-2-2h-1.586a1 1 0 01-.707-.293L12.293 4.293A1 1 0 0011.586 4H10a2 2 0 00-2 2v5zM15 10h.01"></path>
+                                            </svg>
+                                        </button>
+                                        ${!isKnownSpeaker ? `
+                                            <button onclick="showAddSpeakerModal('${segment.file_path}', '${segment.text}', '${segment.speaker_name}')" 
+                                                    class="text-green-600 hover:text-green-800 p-1" title="添加为说话人">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path>
+                                                </svg>
+                                            </button>
+                                        ` : ''}
+                                    </div>
+                                </div>
+                                <div class="text-sm text-gray-800">
+                                    ${segment.text}
+                                </div>
+                            </div>
+                        `;
+                    });
+                    
+                    segmentsHtml += '</div>';
+                    segmentsDiv.innerHTML = segmentsHtml;
+                    
+                    item.querySelector('.p-6').appendChild(segmentsDiv);
+                    break;
+                }
+            }
+        }
+
+        // 播放音频片段
+        function playAudioSegment(filePath, speakerName, text) {
+            const modal = document.getElementById('audio-modal');
+            const content = document.getElementById('audio-content');
+            
+            content.innerHTML = `
+                <div class="mb-4">
+                    <div class="flex items-center space-x-2 mb-2">
+                        <span class="speaker-tag ${speakerName.includes('说话人') ? 'speaker-unknown' : 'speaker-known'}">
+                            ${speakerName}
+                        </span>
+                    </div>
+                    <p class="text-sm text-gray-600 mb-4">${text}</p>
+                    <audio controls class="w-full">
+                        <source src="${getBaseUrl()}/${filePath}" type="audio/wav">
+                        您的浏览器不支持音频播放
+                    </audio>
+                </div>
+            `;
+            
+            modal.classList.remove('hidden');
+        }
+
+        // 关闭音频模态框
+        function closeAudioModal() {
+            const modal = document.getElementById('audio-modal');
+            modal.classList.add('hidden');
+            
+            // 停止播放
+            const audio = modal.querySelector('audio');
+            if (audio) {
+                audio.pause();
+                audio.currentTime = 0;
+            }
+        }
+
+        // 显示添加说话人模态框
+        function showAddSpeakerModal(filePath, text, currentSpeaker) {
+            currentAudioSegment = { filePath, text, currentSpeaker };
+            
+            const modal = document.getElementById('speaker-modal');
+            const audioInfo = document.getElementById('speaker-audio-info');
+            
+            audioInfo.textContent = `"${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`;
+            
+            modal.classList.remove('hidden');
+            document.getElementById('speaker-name-input').focus();
+        }
+
+        // 关闭说话人模态框
+        function closeSpeakerModal() {
+            const modal = document.getElementById('speaker-modal');
+            modal.classList.add('hidden');
+            document.getElementById('speaker-name-input').value = '';
+            currentAudioSegment = null;
+        }
+
+        // 添加说话人
+        async function addSpeaker() {
+            const speakerName = document.getElementById('speaker-name-input').value.trim();
+            
+            if (!speakerName) {
+                alert('请输入说话人姓名');
+                return;
+            }
+            
+            if (!currentAudioSegment) {
+                alert('音频片段信息丢失');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${getBaseUrl()}/api/register_speaker_from_segment`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        speaker_name: speakerName,
+                        audio_file_path: currentAudioSegment.filePath,
+                        text_sample: currentAudioSegment.text
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert(`说话人 "${speakerName}" 添加成功！`);
+                    closeSpeakerModal();
+                    loadHistory(); // 重新加载历史记录
+                } else {
+                    alert(`添加失败: ${data.error}`);
+                }
+            } catch (error) {
+                console.error('添加说话人失败:', error);
+                alert('添加说话人失败');
+            }
+        }
+
+        // 加载说话人列表
+        async function loadSpeakers() {
+            try {
+                const response = await fetch(`${getBaseUrl()}/api/speakers`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    currentSpeakers = data.speakers;
+                }
+            } catch (error) {
+                console.error('加载说话人列表失败:', error);
+            }
+        }
+
+        // 查看详情
+        function viewDetails(taskId) {
+            // 实现查看详情功能
+            console.log('查看详情:', taskId);
+        }
+
+        // 下载结果
+        function downloadResults(taskId) {
+            window.open(`${getBaseUrl()}/api/download_results/${taskId}`, '_blank');
+        }
+
+        // 搜索功能
+        document.getElementById('search-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                loadHistory();
+            }
+        });
+
+        // 筛选器变化时自动搜索
+        document.getElementById('status-filter').addEventListener('change', loadHistory);
+        document.getElementById('date-filter').addEventListener('change', loadHistory);
+
+        // 页面加载时初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            loadHistory();
+        });
+    </script>
+</body>
+</html>
