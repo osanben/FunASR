@@ -76,7 +76,7 @@ def main():
         "--model_type", "paraformer",
         "--device", "cuda",
         "--ngpu", "1",
-        "--env", "local"
+        "--env", "test"
     ]
     
     print("📋 启动命令:")
