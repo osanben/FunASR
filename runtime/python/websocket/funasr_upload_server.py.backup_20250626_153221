@@ -749,25 +749,6 @@ def detect_speakers_with_voice_print(audio_data, segments, sample_rate=16000):
             
             try:
             
-            # 🔧 强制限制CAM++模型的线程数
-            import os
-            import torch
-            
-            # 保存原始设置
-            original_omp_threads = os.environ.get('OMP_NUM_THREADS', '1')
-            original_mkl_threads = os.environ.get('MKL_NUM_THREADS', '1')
-            original_torch_threads = torch.get_num_threads()
-            
-            # 强制设置为单线程
-            os.environ['OMP_NUM_THREADS'] = '1'
-            os.environ['MKL_NUM_THREADS'] = '1'
-            os.environ['OPENBLAS_NUM_THREADS'] = '1'
-            os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
-            os.environ['NUMEXPR_NUM_THREADS'] = '1'
-            torch.set_num_threads(1)
-            
-            try:
-            
             # 使用专门的说话人分离参数
             res = model_asr.generate(
                 input=audio_data,
@@ -845,37 +826,11 @@ def detect_speakers_with_voice_print(audio_data, segments, sample_rate=16000):
                 torch.set_num_threads(original_torch_threads)
                 print("🔧 已恢复原始线程设置")
             
-            finally:
-                # 🔧 恢复原始线程设置
-                os.environ['OMP_NUM_THREADS'] = original_omp_threads
-                os.environ['MKL_NUM_THREADS'] = original_mkl_threads
-                torch.set_num_threads(original_torch_threads)
-                print("🔧 已恢复原始线程设置")
-            
         except Exception as e:
             print(f"⚠️ CAM++模型调用失败: {e}")
         
         # 方法2: 尝试使用其他专业音色模型
         try:            print("🔧 尝试使用独立的说话人识别模型...")
-            
-            # 🔧 强制限制独立模型的线程数
-            import os
-            import torch
-            
-            # 保存原始设置
-            original_omp_threads2 = os.environ.get('OMP_NUM_THREADS', '1')
-            original_mkl_threads2 = os.environ.get('MKL_NUM_THREADS', '1')
-            original_torch_threads2 = torch.get_num_threads()
-            
-            # 强制设置为单线程
-            os.environ['OMP_NUM_THREADS'] = '1'
-            os.environ['MKL_NUM_THREADS'] = '1'
-            os.environ['OPENBLAS_NUM_THREADS'] = '1'
-            os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
-            os.environ['NUMEXPR_NUM_THREADS'] = '1'
-            torch.set_num_threads(1)
-            
-            try:
             
             # 🔧 强制限制独立模型的线程数
             import os
@@ -1036,13 +991,6 @@ def detect_speakers_with_voice_print(audio_data, segments, sample_rate=16000):
                                 "duration": end_time - start_time
                             })                        print(f"✅ 独立音色模型检测到{unique_labels}个说话人")
                         return enhanced_segments
-                        
-            finally:
-                # 🔧 恢复原始线程设置
-                os.environ['OMP_NUM_THREADS'] = original_omp_threads2
-                os.environ['MKL_NUM_THREADS'] = original_mkl_threads2
-                torch.set_num_threads(original_torch_threads2)
-                print("🔧 已恢复独立模型线程设置")
                         
             finally:
                 # 🔧 恢复原始线程设置
